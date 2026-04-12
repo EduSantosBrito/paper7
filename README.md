@@ -14,7 +14,13 @@ curl -sSL https://raw.githubusercontent.com/lucianfialho/paper7/main/install.sh 
 
 ## AI Agent Skill
 
-paper7 ships with a [Claude Code](https://docs.anthropic.com/en/docs/claude-code) slash command. Once installed, your agent can search arXiv and fetch papers directly into the conversation.
+paper7 ships with an installable [skill](https://skills.sh) that teaches AI coding agents (Claude Code, Cursor, Codex) how to use it. Once installed, your agent can search arXiv and fetch papers directly into the conversation.
+
+```bash
+npx skills add lucianfialho/paper7 --skill paper7
+```
+
+Or manually as a Claude Code slash command:
 
 ```bash
 mkdir -p ~/.claude/commands
@@ -22,12 +28,10 @@ curl -sL https://raw.githubusercontent.com/lucianfialho/paper7/main/claude-code/
   -o ~/.claude/commands/paper7.md
 ```
 
-After installing, try inside Claude Code:
-
-```
-/paper7 search "attention mechanism"
-/paper7 get 2401.04088
-```
+After installing, try prompts like:
+- `paper7 search "attention mechanism"` — search arXiv
+- `paper7 get 2401.04088` — fetch a paper as clean Markdown
+- `paper7 get 2401.04088 --no-refs` — fetch without references to save tokens
 
 ## Usage
 

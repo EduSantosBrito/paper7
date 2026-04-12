@@ -1,0 +1,110 @@
+---
+name: paper7
+description: Search and fetch arXiv papers as clean Markdown for LLM context. Use this skill when the user wants to find academic papers, read research, build a knowledge base from arXiv, or use a paper as context for analysis. Triggers include "paper7", "find a paper about", "fetch this arXiv paper", "search arXiv", "read this paper", "build a KB", or any task involving academic paper retrieval and comprehension.
+---
+
+# paper7
+
+Fetch arXiv papers as clean Markdown — 97% smaller than PDF, with proper headers and structure.
+
+## Install
+
+```bash
+curl -sSL https://raw.githubusercontent.com/lucianfialho/paper7/main/install.sh | bash
+```
+
+## Core Workflow
+
+1. **Search** arXiv for papers by keyword
+2. **Pick** a paper from the results
+3. **Fetch** it as clean Markdown
+4. **Use** the content as context for the conversation
+
+```bash
+# Search
+paper7 search "attention mechanism" --max 5
+
+# Fetch a paper
+paper7 get 2401.04088
+
+# Fetch without references (saves tokens)
+paper7 get 2401.04088 --no-refs
+
+# Fetch by URL
+paper7 get https://arxiv.org/abs/2401.04088
+
+# Find GitHub repos linked in a paper
+paper7 repo 2401.04088
+
+# List cached papers
+paper7 list
+
+# Clear cache
+paper7 cache clear 2401.04088
+paper7 cache clear
+```
+
+## Patterns
+
+### Building a knowledge base
+
+When the user wants to research a topic, search first, then fetch multiple papers:
+
+```bash
+paper7 search "retrieval augmented generation" --max 10
+paper7 get 2005.11401 > kb/rag.md
+paper7 get 2312.10997 > kb/rag-survey.md
+```
+
+### Feeding papers to the conversation
+
+After fetching, read the output and use it as context. The paper content includes:
+- Structured header: `# Title`, `**Authors:**`, `**arXiv:** link`
+- Clean `##` section headers matching the paper structure
+- Paragraphs with proper spacing
+- Bold/italic inline formatting
+
+### Stripping references
+
+Use `--no-refs` to remove the References section — this can save 10-30% of tokens on papers with large bibliographies.
+
+### Comparing papers
+
+Fetch multiple papers and analyze differences:
+
+```bash
+paper7 get 1706.03762 --no-refs > /tmp/attention.md
+paper7 get 2401.04088 --no-refs > /tmp/mixtral.md
+```
+
+Then read both and compare.
+
+## CLI Reference
+
+```
+paper7 <command> [options]
+
+Commands:
+  search <query>       Search arXiv by keyword
+  get <id|url>         Fetch paper as Markdown
+  repo <id>            Find GitHub repos for a paper
+  list                 Show cached papers
+  cache clear [id]     Clear cache
+
+Search options:
+  --max N              Max results (default: 10)
+  --sort relevance|date
+
+Get options:
+  --no-refs            Strip references section
+  --no-cache           Force re-download
+```
+
+## Gotchas
+
+- **ar5iv availability**: Very recent papers (last 24-48h) may not be on ar5iv yet. If you get a 404, the paper hasn't been converted to HTML.
+- **Tables**: Complex tables with merged cells lose structure in Markdown conversion. The text content is preserved but layout may be flattened.
+- **Figures**: Images and diagrams are not included — only their captions appear as text.
+- **Math**: LaTeX notation is partially cleaned. Complex equations may have Unicode artifacts (subscript/superscript characters).
+- **arXiv ID format**: Accepts `YYMM.NNNNN` (e.g. `2401.04088`) or full URLs. Old-style IDs like `hep-th/9905111` are not supported.
+- **Cache location**: Papers are cached at `~/.paper7/cache/<id>/paper.md`. Use `paper7 list` to see what's cached.
