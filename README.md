@@ -16,8 +16,8 @@ Tested with 5 landmark papers (Attention, RAG, Mixtral, GPT-4, LoRA) — 169 pag
                           Size (5 papers combined)
 
   Raw PDF       ████████████████████████████████████████████████  12,140KB
-  HTML (ar5iv)  ██████████████████                                2,522KB
-  paper7        ██                                                  349KB  (-97% vs PDF)
+  HTML (ar5iv)  ██████████████████                                 2,522KB
+  paper7        ██                                                   349KB  (-97% vs PDF)
 ```
 
 | Paper | Pages | PDF | HTML | paper7 | vs PDF | vs HTML |
@@ -30,27 +30,6 @@ Tested with 5 landmark papers (Attention, RAG, Mixtral, GPT-4, LoRA) — 169 pag
 | **Total** | **169** | **12,140KB** | **2,522KB** | **349KB** | **-97%** | **-86%** |
 
 > Reproduce with `./benchmark/run.sh`
-
-## How It Works
-
-```
-search "topic" ──> choose papers ──> get (fetch + clean) ──> use as LLM context
-                                          │
-                                          ▼
-                                    ~/.paper7/
-                                    └── cache/
-                                        ├── 2401.04088/
-                                        │   ├── paper.md    ← clean markdown
-                                        │   └── meta.json   ← title, authors
-                                        └── 1706.03762/
-                                            ├── paper.md
-                                            └── meta.json
-```
-
-1. **Search** arXiv API for papers by keyword
-2. **Fetch** full text from [ar5iv](https://ar5iv.labs.arxiv.org) (HTML version of arXiv — no PDF parsing needed)
-3. **Convert** to clean Markdown with proper headers, paragraphs, and structure
-4. **Cache** locally as your knowledge base
 
 ## Install
 
@@ -66,11 +45,11 @@ curl -sL https://raw.githubusercontent.com/lucianfialho/paper7/main/paper7.sh -o
 chmod +x ~/.local/bin/paper7
 ```
 
-**Dependencies:** `curl`, `sed`, `grep`, `awk` — already on any Unix system.
+**Requirements:** `curl`, `sed`, `grep`, `awk` — already on any Unix system.
 
 ## Usage
 
-### Search for papers
+### Search
 
 ```bash
 $ paper7 search "mixture of experts" --max 3
@@ -84,7 +63,7 @@ Found 55723 papers (showing 3):
   Xin He, Shunkang Zhang, ... (2024-10-23)
 ```
 
-### Fetch a paper
+### Fetch
 
 ```bash
 paper7 get 2401.04088                          # by ID
@@ -93,7 +72,7 @@ paper7 get 2401.04088 --no-refs                # strip references
 paper7 get 2401.04088 --no-cache               # force re-download
 ```
 
-### Find the source code
+### Find source code
 
 ```bash
 $ paper7 repo 2401.04088
@@ -102,7 +81,7 @@ Repositories for 2401.04088:
   https://github.com/mistralai/mistral-src
 ```
 
-### Manage your knowledge base
+### Knowledge base
 
 ```bash
 $ paper7 list
@@ -117,54 +96,63 @@ $ paper7 cache clear 2401.04088   # remove one
 $ paper7 cache clear              # clear all
 ```
 
+## Integrations
+
 ### Pipe to anything
 
 ```bash
-paper7 get 2401.04088 | wc -w                          # word count
-paper7 get 2401.04088 --no-refs > paper.md              # save to file
-paper7 get 2401.04088 | pbcopy                          # clipboard (macOS)
-paper7 get 2401.04088 | claude "explain the key ideas"  # feed to LLM
+paper7 get 2401.04088 | claude "explain the key ideas"  # Claude Code
+paper7 get 2401.04088 | llm "summarize this"            # simon willison's llm
+paper7 get 2401.04088 | pbcopy                           # clipboard (macOS)
+paper7 get 2401.04088 --no-refs > paper.md               # save to file
 ```
 
-### Claude Code integration
+### Claude Code
 
-Use paper7 as a slash command inside [Claude Code](https://docs.anthropic.com/en/docs/claude-code):
+Use paper7 as a `/slash` command inside [Claude Code](https://docs.anthropic.com/en/docs/claude-code):
 
 ```bash
-# Install the command (globally)
 mkdir -p ~/.claude/commands
-curl -sL https://raw.githubusercontent.com/lucianfialho/paper7/main/claude-code/paper7.md -o ~/.claude/commands/paper7.md
+curl -sL https://raw.githubusercontent.com/lucianfialho/paper7/main/claude-code/paper7.md \
+  -o ~/.claude/commands/paper7.md
 ```
 
-Then inside Claude Code:
+Then:
 
 ```
 /paper7 search "attention mechanism"
 /paper7 get 2401.04088
 ```
 
-See [`claude-code/`](claude-code/) for details.
+## How It Works
+
+1. **Search** arXiv API for papers by keyword
+2. **Fetch** full text from [ar5iv](https://ar5iv.labs.arxiv.org) (HTML version of arXiv — no PDF parsing)
+3. **Convert** to clean Markdown with proper `##` headers, paragraphs, and structure
+4. **Cache** locally at `~/.paper7/cache/`
+
+paper7 skips PDF parsing entirely. ar5iv provides arXiv papers as HTML, which is the same source content without the layout overhead. paper7 extracts the article body, converts HTML tags to Markdown, strips navigation/CSS/scripts, and outputs clean text.
 
 ## Why Not Just Use PDF?
 
-| | Raw PDF | HTML | paper7 |
-|---|---|---|---|
-| Size | Huge (images, fonts, layout) | Large (CSS, scripts, nav) | Minimal (text only) |
-| Structure | None (flat binary) | Buried in markup | Clean Markdown headers |
-| Two-column layout | Broken flow | Preserved but noisy | Linear text |
-| Headers/footers | Every page | Navigation chrome | Removed |
-| Math formulas | Garbled | HTML entities | Cleaned |
-| Authors/metadata | In body noise | Mixed with UI | Structured header |
-| Caching/KB | No | No | Built-in |
-| Dependencies | AI Vision API / poppler | Browser | curl (any Unix) |
+| | Raw PDF | paper7 |
+|---|---|---|
+| Size | ~12MB for 5 papers | ~350KB (-97%) |
+| Structure | Flat binary, no sections | Markdown with `##` headers |
+| Two-column layout | Broken text flow | Linear reading order |
+| Page headers/footers | Repeated on every page | Removed |
+| Math notation | Garbled or requires Vision API | Cleaned |
+| Metadata | Mixed into body text | Structured header (title, authors, link) |
+| Local cache | No | Built-in knowledge base |
+| Dependencies | Vision API or poppler | `curl` |
 
 ## Research
 
-The approach of extracting clean text instead of sending raw PDFs to LLMs is supported by academic research. See [`examples/research-kb/`](examples/research-kb/) for a knowledge base built with paper7 itself, including:
+The clean-text-over-raw-PDF approach is supported by academic research. See [`examples/research-kb/`](examples/research-kb/) for a knowledge base built with paper7:
 
-- **Lost in the Middle** (Liu et al., 2023) — LLMs lose 20%+ performance when relevant info is buried in long, noisy contexts
-- **PDF-WuKong** (Xie et al., 2024) — sparse sampling reduces tokens by ~89% while improving comprehension
-- **Comparative Study of PDF Parsing Tools** (Adhikari & Agarwal, 2024) — recommends Markdown/LaTeX output for scientific documents
+- **[Lost in the Middle](https://arxiv.org/abs/2307.03172)** (Liu et al., 2023) — LLMs lose 20%+ performance when relevant info is buried in long, noisy contexts
+- **[PDF-WuKong](https://arxiv.org/abs/2410.05970)** (Xie et al., 2024) — sparse sampling reduces tokens by ~89% while improving comprehension
+- **[Comparative Study of PDF Parsing Tools](https://arxiv.org/abs/2410.09871)** (Adhikari & Agarwal, 2024) — recommends Markdown/LaTeX for scientific documents
 
 ## License
 
