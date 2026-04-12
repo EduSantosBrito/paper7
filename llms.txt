@@ -1,0 +1,52 @@
+# paper7
+
+> CLI tool that fetches arXiv papers as clean markdown for LLM knowledge bases. Zero dependencies beyond curl/sed/grep/awk.
+
+## Usage
+
+### Search papers by keyword
+```
+paper7 search "attention mechanism"
+paper7 search "reinforcement learning" --max 20
+paper7 search "transformer architecture" --sort date
+```
+
+### Fetch paper as markdown
+```
+paper7 get 2401.04088
+paper7 get https://arxiv.org/abs/2401.04088
+paper7 get 2401.04088 --no-refs
+paper7 get 2401.04088 --no-cache
+```
+
+### Find GitHub repository for a paper
+```
+paper7 repo 2401.04088
+```
+
+### List cached papers (local KB)
+```
+paper7 list
+```
+
+### Manage cache
+```
+paper7 cache clear
+paper7 cache clear 2401.04088
+```
+
+## Commands
+
+- `search <query>` — Search arXiv papers by keyword. Options: `--max N` (default 10), `--sort relevance|date`
+- `get <id>` — Fetch paper from ar5iv, convert to clean markdown, cache locally. Options: `--no-refs` (strip references), `--no-cache` (force re-download)
+- `repo <id>` — Extract GitHub repository URLs from paper
+- `list` — Show all cached papers with ID and title
+- `cache clear [id]` — Clear all cache or remove specific paper
+
+## Notes
+
+- Papers are fetched from ar5iv.labs.arxiv.org (HTML version of arXiv)
+- Cached papers are stored in `~/.paper7/cache/<id>/paper.md`
+- Like context7 but for academic papers
+- Output is plain text to stdout, suitable for piping
+- Accepts arXiv ID (2401.04088) or full URL (https://arxiv.org/abs/2401.04088)
