@@ -56,14 +56,14 @@ search "topic" ──> choose papers ──> get (fetch + cache) ──> use as 
 ## Install
 
 ```bash
-git clone https://github.com/lucianfialho/paper7.git
-cd paper7
-chmod +x paper7
+curl -sSL https://raw.githubusercontent.com/lucianfialho/paper7/main/install.sh | bash
+```
 
-# Add to PATH (pick one)
-ln -s "$(pwd)/paper7" /usr/local/bin/paper7
-# or
-export PATH="$PATH:$(pwd)"
+Or manually:
+
+```bash
+curl -sL https://raw.githubusercontent.com/lucianfialho/paper7/main/paper7.sh -o /usr/local/bin/paper7
+chmod +x /usr/local/bin/paper7
 ```
 
 **Dependencies:** `curl`, `sed`, `grep`, `awk` — already on any Unix system.
