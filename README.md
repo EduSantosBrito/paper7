@@ -62,8 +62,9 @@ curl -sSL https://raw.githubusercontent.com/lucianfialho/paper7/main/install.sh 
 Or manually:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/lucianfialho/paper7/main/paper7.sh -o /usr/local/bin/paper7
-chmod +x /usr/local/bin/paper7
+mkdir -p ~/.local/bin
+curl -sL https://raw.githubusercontent.com/lucianfialho/paper7/main/paper7.sh -o ~/.local/bin/paper7
+chmod +x ~/.local/bin/paper7
 ```
 
 **Dependencies:** `curl`, `sed`, `grep`, `awk` — already on any Unix system.

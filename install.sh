@@ -2,20 +2,22 @@
 set -euo pipefail
 
 REPO="lucianfialho/paper7"
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="${HOME}/.local/bin"
 BIN_NAME="paper7"
 
 echo "Installing paper7..."
 
-# Download
-curl -sL "https://raw.githubusercontent.com/${REPO}/main/paper7.sh" -o "/tmp/${BIN_NAME}"
-chmod +x "/tmp/${BIN_NAME}"
+mkdir -p "$INSTALL_DIR"
 
-# Install (may need sudo)
-if [ -w "$INSTALL_DIR" ]; then
-  mv "/tmp/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
-else
-  sudo mv "/tmp/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
+curl -sL "https://raw.githubusercontent.com/${REPO}/main/paper7.sh" -o "${INSTALL_DIR}/${BIN_NAME}"
+chmod +x "${INSTALL_DIR}/${BIN_NAME}"
+
+# Check if ~/.local/bin is in PATH
+if ! echo "$PATH" | grep -q "${INSTALL_DIR}"; then
+  echo ""
+  echo "Add ~/.local/bin to your PATH:"
+  echo "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc"
+  echo ""
 fi
 
 echo "paper7 installed to ${INSTALL_DIR}/${BIN_NAME}"
