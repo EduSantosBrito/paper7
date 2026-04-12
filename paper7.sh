@@ -166,18 +166,51 @@ cmd_get() {
     echo "---"
     echo ""
 
-    # Extract article, strip tags, clean LaTeX residue
+    # Extract article, convert HTML to Markdown, clean up
+    # Use awk for robust HTML-to-Markdown conversion
     sed -n '/<article/,/<\/article>/p' "$html_file" \
-      | sed 's/<annotation[^>]*>[^<]*<\/annotation>//g' \
-      | sed 's/<math[^>]*>//g; s/<\/math>//g' \
-      | sed 's/<[^>]*>//g' \
-      | sed 's/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g; s/&quot;/"/g; s/&nbsp;/ /g' \
-      | sed 's/{}^{[^}]*}//g; s/{}_{[^}]*}//g' \
-      | sed 's/\\[a-zA-Z]*{[^}]*}//g' \
-      | sed 's/\\[a-zA-Z]*//g' \
+      | awk '
+        { line = line " " $0 }
+        END {
+          s = line
+          # Remove annotations and math tags
+          gsub(/<annotation[^>]*>[^<]*<\/annotation>/, "", s)
+          gsub(/<math[^>]*>/, "", s); gsub(/<\/math>/, "", s)
+          # Remove section number spans
+          gsub(/<span class="ltx_tag[^"]*">[^<]*<\/span>/, "", s)
+          # Headers
+          gsub(/<h1[^>]*>/, "\n# ", s); gsub(/<\/h1>/, "\n", s)
+          gsub(/<h2[^>]*>/, "\n## ", s); gsub(/<\/h2>/, "\n", s)
+          gsub(/<h3[^>]*>/, "\n### ", s); gsub(/<\/h3>/, "\n", s)
+          gsub(/<h4[^>]*>/, "\n#### ", s); gsub(/<\/h4>/, "\n", s)
+          gsub(/<h5[^>]*>/, "\n##### ", s); gsub(/<\/h5>/, "\n", s)
+          # Paragraphs and breaks
+          gsub(/<\/p>/, "\n\n", s)
+          gsub(/<br[^>]*>/, "\n", s)
+          # Lists
+          gsub(/<li[^>]*>/, "- ", s); gsub(/<\/li>/, "\n", s)
+          # Inline formatting
+          gsub(/<strong[^>]*>/, "**", s); gsub(/<\/strong>/, "**", s)
+          gsub(/<em[^>]*>/, "*", s); gsub(/<\/em>/, "*", s)
+          gsub(/<code[^>]*>/, "`", s); gsub(/<\/code>/, "`", s)
+          # Blockquotes and rules
+          gsub(/<blockquote[^>]*>/, "\n> ", s); gsub(/<\/blockquote>/, "\n", s)
+          gsub(/<hr[^>]*>/, "\n---\n", s)
+          # Strip remaining tags
+          gsub(/<[^>]*>/, "", s)
+          # HTML entities
+          gsub(/&amp;/, "\\&", s); gsub(/&lt;/, "<", s)
+          gsub(/&gt;/, ">", s); gsub(/&quot;/, "\"", s)
+          gsub(/&nbsp;/, " ", s)
+          # LaTeX cleanup
+          gsub(/\{\}\^{[^}]*\}/, "", s); gsub(/\{\}_{[^}]*\}/, "", s)
+          # Print
+          print s
+        }
+      ' \
       | tr -s ' ' \
-      | sed '/^[[:space:]]*$/d' \
-      | sed 's/^[[:space:]]*//'
+      | sed 's/^ //' \
+      | sed '/^$/{ N; /^\n$/d; }'
   } > "$cache_file"
 
   # Save metadata
