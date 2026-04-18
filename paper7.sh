@@ -37,6 +37,9 @@ ${BOLD}Commands:${RESET}
   repo <id>            Find GitHub repositories for a paper
   list                 List cached papers in your KB
   cache clear [id]     Clear cache (all or specific paper)
+  vault init <path>    Configure Obsidian-compatible vault path
+  vault <id>           Export paper to vault as Obsidian-ready Markdown
+  vault all            Export all cached papers to vault
   help                 Show this help
 
 ${BOLD}Options:${RESET}
@@ -50,6 +53,9 @@ ${BOLD}Examples:${RESET}
   paper7 get https://arxiv.org/abs/2401.04088
   paper7 repo 2401.04088
   paper7 list
+  paper7 vault init ~/Documents/ArxivVault
+  paper7 vault 2401.04088
+  paper7 vault all
 EOF
 }
 
@@ -78,6 +84,13 @@ parse_arxiv_id() {
 
 ensure_cache_dir() {
   mkdir -p "$CACHE_DIR"
+}
+
+load_config() {
+  local config_file="${HOME}/.paper7/config"
+  PAPER7_VAULT=""
+  [ -f "$config_file" ] || return 0
+  PAPER7_VAULT=$(grep '^PAPER7_VAULT=' "$config_file" 2>/dev/null | head -1 | cut -d= -f2- || true)
 }
 
 # --- Commands ---
@@ -442,6 +455,187 @@ cmd_cache() {
   esac
 }
 
+cmd_vault_init() {
+  local path="${1:-}"
+  if [ -z "$path" ]; then
+    err "missing vault path. Usage: paper7 vault init <path>"
+    return 1
+  fi
+
+  # Expand leading ~
+  path="${path/#\~/$HOME}"
+
+  if [ ! -d "$path" ]; then
+    info "creating vault directory: $path"
+    mkdir -p "$path" || { err "failed to create vault directory: $path"; return 1; }
+  fi
+
+  mkdir -p "${HOME}/.paper7"
+  local config_file="${HOME}/.paper7/config"
+
+  if [ -f "$config_file" ]; then
+    grep -v '^PAPER7_VAULT=' "$config_file" > "${config_file}.tmp" 2>/dev/null || true
+    mv "${config_file}.tmp" "$config_file"
+  fi
+  echo "PAPER7_VAULT=${path}" >> "$config_file"
+
+  echo "Vault path set to: $path"
+}
+
+cmd_vault_one() {
+  local input="$1"
+  shift || true
+
+  local force=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force) force=true; shift ;;
+      -*) err "unknown flag: $1"; return 1 ;;
+      *)  err "unexpected argument: $1"; return 1 ;;
+    esac
+  done
+
+  load_config
+  if [ -z "${PAPER7_VAULT:-}" ]; then
+    err "vault not configured. Run: paper7 vault init <path>"
+    return 1
+  fi
+  if [ ! -d "$PAPER7_VAULT" ]; then
+    err "vault path missing on disk: $PAPER7_VAULT"
+    return 1
+  fi
+
+  local id
+  id=$(parse_arxiv_id "$input") || return 1
+
+  local cache_md="${CACHE_DIR}/${id}/paper.md"
+  local meta_file="${CACHE_DIR}/${id}/meta.json"
+
+  # Ensure paper is cached
+  if [ ! -f "$cache_md" ]; then
+    info "paper $id not cached, fetching..."
+    cmd_get "$id" > /dev/null || return $?
+  fi
+
+  local title authors
+  title=$(grep -o '"title":"[^"]*"' "$meta_file" 2>/dev/null | sed 's/"title":"//;s/"$//' | head -1 || true)
+  authors=$(grep -o '"authors":"[^"]*"' "$meta_file" 2>/dev/null | sed 's/"authors":"//;s/"$//' | head -1 || true)
+  [ -z "$title" ] && title="Unknown Title"
+
+  local vault_file="${PAPER7_VAULT}/${id}.md"
+
+  if [ -f "$vault_file" ] && [ "$force" = false ]; then
+    err "vault file already exists: $vault_file (use --force to overwrite)"
+    return 1
+  fi
+
+  # YAML-escape double quotes
+  local esc_title="${title//\"/\\\"}"
+
+  # Build authors YAML list (if any)
+  local authors_block=""
+  if [ -n "$authors" ]; then
+    authors_block="authors:"$'\n'
+    IFS=',' read -ra authors_arr <<< "$authors"
+    for author in "${authors_arr[@]}"; do
+      # Trim whitespace
+      author="${author#"${author%%[![:space:]]*}"}"
+      author="${author%"${author##*[![:space:]]}"}"
+      [ -z "$author" ] && continue
+      local esc_author="${author//\"/\\\"}"
+      authors_block+="  - \"${esc_author}\""$'\n'
+    done
+  fi
+
+  {
+    echo "---"
+    echo "title: \"${esc_title}\""
+    echo "aliases:"
+    echo "  - \"${id}\""
+    echo "arxiv_id: \"${id}\""
+    [ -n "$authors_block" ] && printf "%s" "$authors_block"
+    echo "url: \"https://arxiv.org/abs/${id}\""
+    echo "tags:"
+    echo "  - paper"
+    echo "---"
+    echo ""
+
+    # Body: skip paper7's original header block (everything up to and including
+    # the first '---' separator line), then convert arxiv references to wikilinks.
+    awk '/^---$/ { found=1; next } found { print }' "$cache_md" \
+      | sed -E 's|https?://arxiv\.org/abs/([0-9]{4}\.[0-9]{4,5})(v[0-9]+)?|[[\1]]|g' \
+      | sed -E 's|arXiv:[[:space:]]*([0-9]{4}\.[0-9]{4,5})|[[\1]]|g' \
+      | sed -E 's|abs/([0-9]{4}\.[0-9]{4,5})|[[\1]]|g'
+  } > "$vault_file"
+
+  echo "Wrote: $vault_file"
+}
+
+cmd_vault_all() {
+  load_config
+  if [ -z "${PAPER7_VAULT:-}" ]; then
+    err "vault not configured. Run: paper7 vault init <path>"
+    return 1
+  fi
+
+  ensure_cache_dir
+  local count=0
+  local failed=0
+
+  for dir in "${CACHE_DIR}"/*/; do
+    [ -d "$dir" ] || continue
+    local id
+    id=$(basename "$dir")
+    if cmd_vault_one "$id" --force >/dev/null 2>&1; then
+      count=$((count + 1))
+    else
+      failed=$((failed + 1))
+      err "failed: $id"
+    fi
+  done
+
+  echo "Exported ${count} paper(s) to ${PAPER7_VAULT}"
+  [ "$failed" -gt 0 ] && echo "${failed} failed"
+  return 0
+}
+
+cmd_vault() {
+  local subcmd="${1:-}"
+
+  case "$subcmd" in
+    init)
+      shift
+      cmd_vault_init "$@"
+      ;;
+    all)
+      shift
+      cmd_vault_all "$@"
+      ;;
+    ""|--help|-h)
+      cat <<EOF
+Usage: paper7 vault <command>
+
+Commands:
+  init <path>    Configure vault directory (Obsidian-compatible)
+  <id>           Export one paper to the vault
+  all            Export all cached papers to the vault
+
+Options:
+  --force        Overwrite existing vault files
+
+Examples:
+  paper7 vault init ~/Documents/ArxivVault
+  paper7 vault 2401.04088
+  paper7 vault all
+EOF
+      ;;
+    *)
+      # Treat as arxiv ID
+      cmd_vault_one "$@"
+      ;;
+  esac
+}
+
 # --- Main ---
 
 main() {
@@ -459,6 +653,7 @@ main() {
     repo)       cmd_repo "$@" ;;
     list)       cmd_list ;;
     cache)      cmd_cache "$@" ;;
+    vault)      cmd_vault "$@" ;;
     help|--help|-h)  usage ;;
     --version|-v)    echo "paper7 $VERSION" ;;
     *)

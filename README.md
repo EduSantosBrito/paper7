@@ -57,6 +57,11 @@ paper7 list                                     # show cached papers
 paper7 cache clear 2401.04088                   # remove one
 paper7 cache clear                              # clear all
 
+# Export to an Obsidian-compatible vault (frontmatter + wikilinks)
+paper7 vault init ~/Documents/ArxivVault        # configure vault path once
+paper7 vault 2401.04088                         # export one paper
+paper7 vault all                                # export every cached paper
+
 # Pipe to anything
 paper7 get 2401.04088 | claude "explain this"   # Claude Code
 paper7 get 2401.04088 | llm "summarize"         # simon willison's llm
@@ -128,6 +133,8 @@ Commands:
   repo <id>            Find GitHub repositories for a paper
   list                 List cached papers
   cache clear [id]     Clear cache (all or specific paper)
+  vault init <path>    Configure Obsidian-compatible vault
+  vault <id>|all       Export paper(s) to vault with frontmatter + wikilinks
 
 Options:
   --max N              Max search results (default: 10)
