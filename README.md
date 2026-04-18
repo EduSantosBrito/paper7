@@ -1,7 +1,7 @@
 <h1 align="center">paper7</h1>
 
 <p align="center">
-  Turn any arXiv paper into clean Markdown — at runtime, with zero dependencies.<br>
+  Turn any arXiv or PubMed paper into clean Markdown — at runtime, with zero dependencies.<br>
   <strong>97% smaller than PDF. 86% smaller than raw HTML.</strong><br><br>
   <a href="#benchmark"><strong>See the benchmark →</strong></a>
 </p>
@@ -14,7 +14,7 @@ curl -sSL https://raw.githubusercontent.com/lucianfialho/paper7/main/install.sh 
 
 ## AI Agent Skill
 
-paper7 ships with an installable [skill](https://skills.sh) that teaches AI coding agents (Claude Code, Cursor, Codex) how to use it. Once installed, your agent can search arXiv and fetch papers directly into the conversation.
+paper7 ships with an installable [skill](https://skills.sh) that teaches AI coding agents (Claude Code, Cursor, Codex) how to use it. Once installed, your agent can search arXiv or PubMed and fetch papers directly into the conversation.
 
 ```bash
 # Core skill — search and fetch papers
@@ -111,12 +111,21 @@ Reproduce with `./benchmark/run.sh`.
 
 ## How it works
 
+**arXiv flow** (full-text):
+
 1. **Search** arXiv API for papers by keyword
 2. **Fetch** full text from [ar5iv](https://ar5iv.labs.arxiv.org) (HTML version of arXiv — no PDF parsing)
 3. **Convert** HTML to clean Markdown with proper `##` headers, paragraphs, and structure
-4. **Cache** locally at `~/.paper7/cache/`
+4. **Cache** locally at `~/.paper7/cache/<arxiv_id>/`
 
-paper7 skips PDF parsing entirely. ar5iv provides arXiv papers as HTML, which is the same source content without the binary layout overhead. paper7 extracts the article body, converts HTML tags to Markdown, and strips everything else.
+**PubMed flow** (abstract-only):
+
+1. **Search** NCBI E-utilities (`esearch` + `esummary`) for papers by keyword
+2. **Fetch** abstract via `efetch` (XML) — full text lives on PMC and is a separate pipeline
+3. **Convert** XML to clean Markdown with title, authors, journal, DOI, and abstract (labeled sections preserved)
+4. **Cache** locally at `~/.paper7/cache/pmid-<NNN>/`
+
+paper7 skips PDF parsing entirely. For arXiv, ar5iv provides the same content as HTML without binary layout overhead. For PubMed, the E-utilities XML is already structured metadata. In both cases, paper7 extracts the body, converts tags to Markdown, and strips everything else.
 
 ## Why not just use PDF?
 
