@@ -5,6 +5,38 @@ All notable changes to paper7 are documented here.
 The format loosely follows [Keep a Changelog](https://keepachangelog.com).
 Pre-1.0, minor versions may add features; breaking changes (if any) are called out explicitly.
 
+## [0.4.0] — 2026-04-18
+
+DOI as a first-class identifier. paper7 now fetches any preprint or article with a DOI — bioRxiv, medRxiv, PsyArXiv, ChemRxiv, journal articles. Crossref joins the source roster.
+
+### Added
+
+- **`paper7 get doi:<DOI>`** — accepts any DOI matching `^10\.[0-9]{4,9}/.+$`. Resolution: Crossref `/works/{DOI}` for metadata + JATS-cleaned abstract → emits Markdown header (title, authors, source, publication date, DOI, full-text URL, optional TLDR) + abstract body. Cached at `~/.paper7/cache/doi-<sanitized>/` (`/` → `_` for filesystem safety).
+- **arXiv-DOI auto-redirect** — `paper7 get doi:10.48550/arXiv.YYMM.NNNNN` silently delegates to `cmd_get_arxiv` and reuses the existing arXiv cache. No duplicate `doi-*` directory.
+- **Crossref documented in `docs/sources.md`** with the established template, plus a dedicated bioRxiv/medRxiv section explaining their HTTP 403 limitation honestly.
+- New helpers in `paper7.sh`: `is_doi_input`, `parse_doi`, `doi_to_dir_suffix`.
+- `tests/test_doi.sh` — 7 assertions covering happy path, arXiv-DOI redirect, invalid DOI, list integration, cache clear.
+
+### Changed
+
+- `cmd_get` dispatcher checks `is_doi_input` BEFORE `is_pmid_input` (more specific prefix wins).
+- `cmd_list` now reads `id` from `meta.json` instead of reverse-engineering from dir name. Side benefit: fixes a latent bug where DOIs containing literal `_` would have been displayed wrong.
+- `cmd_cache clear` accepts `doi:<DOI>` (joins existing `pmid:NNN` and arXiv-id paths).
+- README Sources subsection mentions DOI fetch coverage; Usage block adds `doi:` example; CLI reference adds `doi:` shape under `get`.
+
+### Notes
+
+- **bioRxiv/medRxiv full text is NOT available.** Their pages return HTTP 403 to direct curl regardless of User-Agent (Cloudflare with JS challenge). paper7 returns metadata + Crossref abstract only, with a `**Full text:**` link the user opens in a browser. This is a deliberate scope re-cut from the original plan; documented in `docs/sources.md` so it isn't a hidden surprise.
+- `jq` was already a hard dep for S2-using commands; `cmd_get_doi` reuses the same `s2_check_jq` guard. No new install requirement.
+- Crossref `mailto` (polite-pool courtesy) is hardcoded to `paper7@example.com`. Env var support is a planned follow-up if rate limits or accountability issues emerge in practice.
+- DOI URL form (`https://doi.org/...`) is not yet accepted as input — only the `doi:` prefix. Easy follow-up.
+
+### Out of scope (planned follow-ups)
+
+- DOI URL form support
+- Crossref mailto via env var
+- `paper7 search --source biorxiv` (bioRxiv has no public keyword-search API; PubMed already covers biomed search well)
+
 ## [0.3.0] — 2026-04-18
 
 Semantic Scholar joins as a metadata-layer source. Real reference graph + TLDR enrichment for `paper7 get`. Establishes `docs/sources.md` as the per-source documentation home.
@@ -94,6 +126,7 @@ Initial release.
 - Claude Code slash command + skills.sh package (paper7, paper7-research)
 - Benchmark: 97% smaller than PDF, 86% smaller than raw HTML across 5 landmark papers
 
+[0.4.0]: https://github.com/lucianfialho/paper7/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/lucianfialho/paper7/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/lucianfialho/paper7/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/lucianfialho/paper7/compare/v0.1.0...v0.2.0
