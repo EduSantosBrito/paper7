@@ -166,13 +166,13 @@ parse_range_spec() {
   if [[ "$input" =~ ^([0-9]+):([0-9]+)$ ]]; then
     local start="${BASH_REMATCH[1]}"
     local end="${BASH_REMATCH[2]}"
-    if [ "$start" -le "$end" ]; then
+    if [ "$start" -ge 1 ] && [ "$start" -le "$end" ]; then
       echo "${start}:${end}"
       return 0
     fi
   fi
 
-  err "invalid range: $input (expected format: START:END)"
+  err "invalid range: $input (expected format: START:END, START >= 1)"
   return 1
 }
 
@@ -267,6 +267,7 @@ generate_index_rows() {
       next
     }
     /^#[[:space:]]+/ {
+      if (NR == 1) next
       flush(NR - 1)
       count++
       titles[count] = substr($0, 3)
@@ -319,6 +320,7 @@ render_compact_output() {
   local index_rows
   index_rows=$(generate_index_rows "$view_file")
   if [ -z "$index_rows" ]; then
+    info "no section headers found; emitting full paper"
     cat "$view_file"
     return 0
   fi
