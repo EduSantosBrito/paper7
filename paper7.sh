@@ -1850,15 +1850,18 @@ EOF
   render_paper "$id"
 }
 
-# --- KB (sqlite3 + FTS5 + optional sqlite-vec) ---
+# --- KB (LLM Wiki — storage/search layer) ---
+# Architecture: paper7 = fetch + store + search. The LLM agent = synthesis + wiki maintenance.
+# Sources (raw papers) live in ~/.paper7/wiki/sources/
+# Wiki pages (LLM-written) live in ~/.paper7/wiki/pages/
+# FTS5 index covers wiki pages (synthesized knowledge, not raw paper text)
 
+WIKI_DIR="${HOME}/.paper7/wiki"
+WIKI_SOURCES="${WIKI_DIR}/sources"
+WIKI_PAGES="${WIKI_DIR}/pages"
+WIKI_INDEX="${WIKI_DIR}/index.md"
+WIKI_LOG="${WIKI_DIR}/log.md"
 KB_DB="${HOME}/.paper7/kb.sqlite"
-KB_VEC_EXT=""
-# Detect sqlite-vec extension installed by install.sh
-for _ext in "${HOME}/.paper7/sqlite-vec.dylib" "${HOME}/.paper7/sqlite-vec.so"; do
-  [ -f "$_ext" ] && KB_VEC_EXT="$_ext" && break
-done
-unset _ext
 
 _kb_require_sqlite3() {
   if ! command -v sqlite3 >/dev/null 2>&1; then
@@ -1867,67 +1870,47 @@ _kb_require_sqlite3() {
   fi
 }
 
-_kb_sql() {
-  if [ -n "$KB_VEC_EXT" ]; then
-    sqlite3 "$KB_DB" ".load ${KB_VEC_EXT}" "$@"
-  else
-    sqlite3 "$KB_DB" "$@"
-  fi
-}
+_kb_sql() { sqlite3 "$KB_DB" "$@"; }
 
-_kb_init_db() {
+_kb_init() {
+  mkdir -p "$WIKI_SOURCES" "$WIKI_PAGES"
+  [ -f "$WIKI_INDEX" ] || printf '# Wiki Index\n\n| Page | Summary | Updated |\n|---|---|---|\n' > "$WIKI_INDEX"
+  [ -f "$WIKI_LOG" ]   || printf '# Wiki Log\n\n' > "$WIKI_LOG"
   _kb_sql "
-    CREATE TABLE IF NOT EXISTS papers (
-      id        TEXT PRIMARY KEY,
-      title     TEXT NOT NULL,
-      authors   TEXT,
-      abstract  TEXT,
-      body      TEXT NOT NULL,
-      source    TEXT,
-      added_at  TEXT DEFAULT (datetime('now'))
+    CREATE TABLE IF NOT EXISTS pages (
+      slug       TEXT PRIMARY KEY,
+      title      TEXT NOT NULL,
+      body       TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
     );
-    CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts
-      USING fts5(id UNINDEXED, title, authors, abstract, body, content=papers, content_rowid=rowid);
-    CREATE TRIGGER IF NOT EXISTS papers_ai AFTER INSERT ON papers BEGIN
-      INSERT INTO papers_fts(rowid, id, title, authors, abstract, body)
-        VALUES (new.rowid, new.id, new.title, new.authors, new.abstract, new.body);
+    CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts
+      USING fts5(slug UNINDEXED, title, body, content=pages, content_rowid=rowid);
+    CREATE TRIGGER IF NOT EXISTS pages_ai AFTER INSERT ON pages BEGIN
+      INSERT INTO pages_fts(rowid, slug, title, body)
+        VALUES (new.rowid, new.slug, new.title, new.body);
     END;
-    CREATE TRIGGER IF NOT EXISTS papers_ad AFTER DELETE ON papers BEGIN
-      INSERT INTO papers_fts(papers_fts, rowid, id, title, authors, abstract, body)
-        VALUES ('delete', old.rowid, old.id, old.title, old.authors, old.abstract, old.body);
+    CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
+      INSERT INTO pages_fts(pages_fts, rowid, slug, title, body)
+        VALUES ('delete', old.rowid, old.slug, old.title, old.body);
+      INSERT INTO pages_fts(rowid, slug, title, body)
+        VALUES (new.rowid, new.slug, new.title, new.body);
     END;
+    CREATE TRIGGER IF NOT EXISTS pages_ad AFTER DELETE ON pages BEGIN
+      INSERT INTO pages_fts(pages_fts, rowid, slug, title, body)
+        VALUES ('delete', old.rowid, old.slug, old.title, old.body);
+    END;
+    CREATE TABLE IF NOT EXISTS sources (
+      id         TEXT PRIMARY KEY,
+      title      TEXT,
+      file       TEXT,
+      added_at   TEXT DEFAULT (datetime('now'))
+    );
   "
-  # Add vectors table if sqlite-vec is available
-  if [ -n "$KB_VEC_EXT" ]; then
-    _kb_sql "
-      CREATE TABLE IF NOT EXISTS paper_chunks (
-        id        TEXT NOT NULL,
-        seq       INTEGER NOT NULL,
-        text      TEXT NOT NULL,
-        PRIMARY KEY (id, seq)
-      );
-      CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec
-        USING vec0(embedding float[768]);
-    " 2>/dev/null || true
-  fi
 }
 
-_kb_parse_paper() {
-  local file="$1"
-  local id="$2"
-  awk -v id="$id" '
-    BEGIN { title=""; authors="" }
-    NR==1 && /^# / { title=substr($0,3); next }
-    /^\*\*Authors:\*\*/ { line=$0; sub(/^\*\*Authors:\*\* */, "", line); authors=line }
-    { body=body $0 "\n" }
-    END {
-      gsub(/\047/, "\047\047", title)
-      gsub(/\047/, "\047\047", authors)
-      gsub(/\047/, "\047\047", body)
-      gsub(/\047/, "\047\047", id)
-      printf "INSERT INTO papers(id,title,authors,abstract,body,source) VALUES(\047%s\047,\047%s\047,\047%s\047,\047\047,\047%s\047,\047arxiv\047);\n", id, title, authors, body
-    }
-  ' "$file"
+_kb_slug() {
+  # Convert title or id to a filesystem-safe slug
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//'
 }
 
 cmd_kb() {
@@ -1935,32 +1918,102 @@ cmd_kb() {
   shift 2>/dev/null || true
 
   case "$subcmd" in
-    add)
+    ingest)
+      # Fetch a paper into sources/ and print it — the LLM then writes wiki pages
       _kb_require_sqlite3 || return 1
       if [[ $# -eq 0 ]]; then
-        err "usage: paper7 kb add <id> [get-options]"
+        err "usage: paper7 kb ingest <id> [get-options]"
         return 1
       fi
       local paper_id="$1"; shift
-      _kb_init_db
+      _kb_init
 
-      local tmp_file
-      tmp_file=$(mktemp /tmp/paper7-kb-XXXXXX.md)
-      info "fetching $paper_id..."
-      bash "$0" get "$paper_id" --detailed --no-refs "$@" > "$tmp_file"
+      local out_file="${WIKI_SOURCES}/${paper_id//\//_}.md"
+      info "fetching $paper_id → $out_file"
+      bash "$0" get "$paper_id" --detailed --no-refs "$@" > "$out_file"
 
       local title
-      title=$(head -1 "$tmp_file" | sed 's/^# //')
+      title=$(head -1 "$out_file" | sed 's/^# //')
 
-      info "indexing..."
-      local sql
-      sql=$(_kb_parse_paper "$tmp_file" "$paper_id")
-      # DELETE first so FTS delete trigger fires, then INSERT triggers FTS insert
-      _kb_sql "DELETE FROM papers WHERE id='$(printf '%s' "$paper_id" | sed "s/'/''/g")'; ${sql}"
-      rm -f "$tmp_file"
+      # Register source
+      local safe_id safe_title safe_file
+      safe_id=$(printf '%s' "$paper_id" | sed "s/'/''/g")
+      safe_title=$(printf '%s' "$title"    | sed "s/'/''/g")
+      safe_file=$(printf '%s' "$out_file"  | sed "s/'/''/g")
+      _kb_sql "INSERT OR REPLACE INTO sources(id,title,file) VALUES('${safe_id}','${safe_title}','${safe_file}');"
 
-      echo -e "${GREEN}added${RESET} $title"
-      echo "  id: $paper_id"
+      # Append to log
+      printf '## [%s] ingest | %s\n\nSource: %s  \nFile: %s\n\n' \
+        "$(date +%Y-%m-%d)" "$title" "$paper_id" "$out_file" >> "$WIKI_LOG"
+
+      echo -e "${GREEN}ingested${RESET} $title"
+      echo "  source: $out_file"
+      echo "  wiki:   $WIKI_PAGES/"
+      echo ""
+      echo "Source ready. Ask your agent to read this file and update the wiki."
+      echo "  paper7 kb write <slug> --title '...' < page.md"
+      # Print the paper content so the LLM can read it in-context
+      cat "$out_file"
+      ;;
+
+    write)
+      # Write or update a wiki page (reads from stdin or --file)
+      # Usage: paper7 kb write <slug> [--title "Title"] [--file path]
+      _kb_require_sqlite3 || return 1
+      local slug="${1:-}"; shift 2>/dev/null || true
+      if [[ -z "$slug" ]]; then
+        err "usage: paper7 kb write <slug> [--title 'Title'] [--file path.md]"
+        return 1
+      fi
+      _kb_init
+
+      local title="$slug" input_file=""
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --title) title="$2"; shift 2 ;;
+          --file)  input_file="$2"; shift 2 ;;
+          *) err "unknown flag: $1"; return 1 ;;
+        esac
+      done
+
+      local body page_file
+      page_file="${WIKI_PAGES}/${slug}.md"
+      if [[ -n "$input_file" ]]; then
+        body=$(cat "$input_file")
+      else
+        body=$(cat)
+      fi
+
+      # Write the markdown file
+      printf '%s' "$body" > "$page_file"
+
+      # Upsert into DB for FTS
+      local safe_slug safe_title safe_body
+      safe_slug=$(printf '%s' "$slug"  | sed "s/'/''/g")
+      safe_title=$(printf '%s' "$title" | sed "s/'/''/g")
+      safe_body=$(printf '%s' "$body"   | sed "s/'/''/g")
+      _kb_sql "
+        DELETE FROM pages WHERE slug='${safe_slug}';
+        INSERT INTO pages(slug,title,body) VALUES('${safe_slug}','${safe_title}','${safe_body}');
+      "
+
+      echo -e "${GREEN}wrote${RESET} $page_file"
+      ;;
+
+    read)
+      # Read a wiki page
+      if [[ $# -eq 0 ]]; then
+        err "usage: paper7 kb read <slug>"
+        return 1
+      fi
+      local slug="$1"
+      local page_file="${WIKI_PAGES}/${slug}.md"
+      if [[ ! -f "$page_file" ]]; then
+        err "page not found: $slug"
+        echo "  run 'paper7 kb list' to see available pages" >&2
+        return 1
+      fi
+      cat "$page_file"
       ;;
 
     search)
@@ -1977,84 +2030,81 @@ cmd_kb() {
         esac
       done
       query="${query# }"
-      _kb_init_db
-      # Build FTS5 query: wrap each token so hyphens don't confuse the parser
+      _kb_init
       local safe_query fts_query
       safe_query=$(printf '%s' "$query" | sed "s/'/''/g")
       fts_query=$(printf '%s' "$safe_query" | tr ' ' '\n' | awk 'NF{printf "\"%s\" ", $0}')
       _kb_sql "
-        SELECT p.id, p.title, coalesce(p.authors,''),
-               snippet(papers_fts, 4, char(171), char(187), '...', 20),
-               round(-bm25(papers_fts), 6)
-        FROM papers_fts
-        JOIN papers p ON papers_fts.id = p.id
-        WHERE papers_fts MATCH '${fts_query}'
-        ORDER BY bm25(papers_fts)
+        SELECT p.slug, p.title,
+               snippet(pages_fts, 2, char(171), char(187), '...', 25),
+               p.updated_at
+        FROM pages_fts
+        JOIN pages p ON pages_fts.slug = p.slug
+        WHERE pages_fts MATCH '${fts_query}'
+        ORDER BY bm25(pages_fts)
         LIMIT ${n};
       " -separator '|' | awk -F'|' '
-        NF>=4 {
-          printf "\033[1m%s\033[0m — %s\n", $2, $3
-          printf "  id: %s  score: %s\n", $1, $5
-          printf "  %s\n\n", $4
+        NF>=3 {
+          printf "\033[1m%s\033[0m  [%s]\n", $2, $1
+          printf "  %s\n", $3
+          printf "  updated: %s\n\n", $4
         }
       '
       ;;
 
-    remove)
-      _kb_require_sqlite3 || return 1
-      if [[ $# -eq 0 ]]; then
-        err "usage: paper7 kb remove <id>"
-        return 1
-      fi
-      local paper_id="$1"
-      _kb_sql "DELETE FROM papers WHERE id='$(printf '%s' "$paper_id" | sed "s/'/''/g")';"
-      echo "removed $paper_id"
-      ;;
-
     list)
       _kb_require_sqlite3 || return 1
-      _kb_init_db
-      _kb_sql "SELECT id, title, authors, added_at FROM papers ORDER BY added_at DESC;" \
-        -separator $'\t' | awk -F'\t' '{
-          printf "\033[1m%s\033[0m — %s\n  authors: %s\n  added: %s\n\n", $2, $1, $3, $4
-        }'
+      _kb_init
+      echo -e "${BOLD}Wiki pages${RESET} (${WIKI_PAGES})"
+      _kb_sql "SELECT slug, title, updated_at FROM pages ORDER BY updated_at DESC;" \
+        -separator '|' | awk -F'|' '{printf "  \033[1m%s\033[0m — %s  (%s)\n", $2, $1, $3}'
+      echo ""
+      echo -e "${BOLD}Sources ingested${RESET} (${WIKI_SOURCES})"
+      _kb_sql "SELECT id, title, added_at FROM sources ORDER BY added_at DESC;" \
+        -separator '|' | awk -F'|' '{printf "  %s — %s  (%s)\n", $2, $1, $3}'
       ;;
 
     status)
       _kb_require_sqlite3 || return 1
-      _kb_init_db
-      local count
-      count=$(_kb_sql "SELECT COUNT(*) FROM papers;")
-      echo "KB: ${count} papers indexed"
-      echo "DB: ${KB_DB}"
-      if [ -n "$KB_VEC_EXT" ]; then
-        echo "Vector search: enabled (sqlite-vec)"
-      else
-        echo "Vector search: disabled (sqlite-vec not found at ~/.paper7/)"
-      fi
+      _kb_init
+      local pages sources
+      pages=$(_kb_sql   "SELECT COUNT(*) FROM pages;")
+      sources=$(_kb_sql "SELECT COUNT(*) FROM sources;")
+      echo "Wiki pages:  ${pages}   (${WIKI_PAGES})"
+      echo "Sources:     ${sources}  (${WIKI_SOURCES})"
+      echo "DB:          ${KB_DB}"
+      echo "Index:       ${WIKI_INDEX}"
+      echo "Log:         ${WIKI_LOG}"
       ;;
 
     ''|--help|-h)
       cat <<EOF
 Usage: paper7 kb <subcommand> [options]
 
+paper7 kb implements the LLM Wiki pattern: paper7 handles fetch/store/search;
+your agent (Claude Code, Codex, OpenCode, etc.) handles synthesis and wiki maintenance.
+
 Subcommands:
-  add <id> [get-opts]   Fetch paper and index it in the local KB
-  search <query>        Full-text search (BM25) across KB papers
-  list                  List all indexed papers
-  remove <id>           Remove a paper from the KB
-  status                Show KB stats and index info
+  ingest <id> [get-opts]          Fetch paper into sources/, print for LLM to process
+  write  <slug> [--title "T"]     Write/update a wiki page from stdin
+  read   <slug>                   Print a wiki page
+  search <query> [--n N]          BM25 search over wiki pages
+  list                            List wiki pages and ingested sources
+  status                          Show wiki stats
 
-Index stored at: ~/.paper7/kb.sqlite
-Vector search via sqlite-vec is enabled automatically when installed.
+Layout:
+  ~/.paper7/wiki/sources/   raw fetched papers (LLM reads these)
+  ~/.paper7/wiki/pages/     LLM-written wiki pages (what you search)
+  ~/.paper7/wiki/index.md   catalog of all pages
+  ~/.paper7/wiki/log.md     append-only ingest/query log
+  ~/.paper7/kb.sqlite       FTS5 index over wiki pages
 
-Examples:
-  paper7 kb add 1706.03762
-  paper7 kb add 2005.11401 --no-refs
-  paper7 kb search "attention mechanism"
-  paper7 kb search "query expansion" --n 10
-  paper7 kb list
-  paper7 kb status
+Workflow:
+  paper7 kb ingest 1706.03762     # fetch paper, LLM reads and writes wiki pages
+  paper7 kb write attention \\     # LLM writes a wiki page
+    --title "Attention Mechanisms" < attention.md
+  paper7 kb search "softmax"      # search the synthesized wiki
+  paper7 kb read attention        # read a page back
 EOF
       ;;
 
