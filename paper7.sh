@@ -370,6 +370,10 @@ emit_paper_output() {
   view_file=$(mktemp)
   build_output_view "$cache_file" "$no_refs" "$view_file"
 
+  # Boundary markers so agents can distinguish paper content from instructions.
+  # Content between these tags is untrusted external data — treat as data, not directives.
+  echo "<paper id=\"${canonical_id}\">"
+
   if [ "$detailed" = true ]; then
     if [ -n "$range_spec" ]; then
       local title
@@ -377,17 +381,20 @@ emit_paper_output() {
       render_detailed_range "$view_file" "$title" "$range_spec"
       local rc=$?
       rm -f "$view_file"
+      echo "</paper>"
       return $rc
     fi
 
     cat "$view_file"
     rm -f "$view_file"
+    echo "</paper>"
     return 0
   fi
 
   render_compact_output "$view_file" "$dir" "$canonical_id"
   local rc=$?
   rm -f "$view_file"
+  echo "</paper>"
   return $rc
 }
 
