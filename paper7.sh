@@ -247,36 +247,49 @@ build_output_view() {
 }
 
 generate_index_rows() {
+  # Stack-based parser: a heading at level N closes any open heading at depth >= N,
+  # so each section's range covers all of its descendants regardless of nesting depth.
   awk '
-    function flush(end_line) {
-      if (count == 0) return
-      gsub(/\|/, "\\|", titles[count])
-      printf "| %s | %d-%d |\n", titles[count], starts[count], end_line
+    BEGIN { top = 0; n = 0 }
+
+    function push(level, title, line) {
+      n++
+      p_lvl[n]   = level
+      p_title[n] = title
+      p_start[n] = line
+      p_end[n]   = -1
+      top++
+      stk_idx[top] = n
+      stk_lvl[top] = level
     }
-    /^###[[:space:]]+/ {
-      flush(NR - 1)
-      count++
-      titles[count] = substr($0, 5)
-      starts[count] = NR
+
+    function pop_to(target_level, end_line,    idx) {
+      while (top > 0 && stk_lvl[top] >= target_level) {
+        idx = stk_idx[top]
+        p_end[idx] = end_line
+        top--
+      }
+    }
+
+    /^#{1,4}[[:space:]]+/ {
+      lvl = 0
+      while (substr($0, lvl + 1, 1) == "#") lvl++
+      if (lvl == 1) next
+      title = substr($0, lvl + 2)
+      pop_to(lvl, NR - 1)
+      push(lvl, title, NR)
       next
     }
-    /^##[[:space:]]+/ {
-      flush(NR - 1)
-      count++
-      titles[count] = substr($0, 4)
-      starts[count] = NR
-      next
-    }
-    /^#[[:space:]]+/ {
-      if (NR == 1) next
-      flush(NR - 1)
-      count++
-      titles[count] = substr($0, 3)
-      starts[count] = NR
-      next
-    }
+
     END {
-      if (NR > 0) flush(NR)
+      pop_to(1, NR)
+      for (i = 1; i <= n; i++) {
+        t = p_title[i]
+        gsub(/\[/, "\\[", t); gsub(/\]/, "\\]", t)
+        indent = ""
+        for (j = 2; j < p_lvl[i]; j++) indent = indent "  "
+        printf "%s- [%s](#L%d-L%d)\n", indent, t, p_start[i], p_end[i]
+      }
     }
   ' "$1"
 }
@@ -349,13 +362,12 @@ render_compact_output() {
   fi
 
   echo ""
-  echo "**Index:**"
-  echo "| Section | Lines |"
-  echo "|---------|-------|"
-  printf '%s\n' "$index_rows"
+  echo "## Sections"
   echo ""
-  echo "> Fetch lines: \`paper7 get ${canonical_id} --detailed --range START:END\`"
-  echo "> Full paper: \`paper7 get ${canonical_id} --detailed\`"
+  echo "> Fetch a range: \`paper7 get ${canonical_id} --detailed --range START:END\`  "
+  echo "> Full paper:    \`paper7 get ${canonical_id} --detailed\`"
+  echo ""
+  printf '%s\n' "$index_rows"
 }
 
 emit_paper_output() {
