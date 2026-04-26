@@ -2,10 +2,14 @@
 
 import { Console, Effect } from "effect"
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
+import { Ar5ivClient, Ar5ivLive, type Ar5ivError } from "./ar5iv.js"
 import { ArxivClient, ArxivLive, type ArxivError, type ArxivSearchResult } from "./arxiv.js"
+import { CrossrefClient, CrossrefLive, type CrossrefError } from "./crossref.js"
+import { getArxivPaper, getDoiPaper, getPubmedPaper, type GetError } from "./get.js"
 import type { CliCommand } from "./parser.js"
 import { parseCliArgs } from "./parser.js"
 import { PubmedClient, PubmedLive, type PubmedError, type PubmedSearchResult } from "./pubmed.js"
+import { getReferences, type RefsError } from "./refs.js"
 
 export const VERSION = "0.6.0-beta.0"
 
@@ -56,7 +60,7 @@ Examples:
   paper7 vault all
 `)
 
-const runCommand = (command: CliCommand): Effect.Effect<void, Error, ArxivClient | PubmedClient> => {
+const runCommand = (command: CliCommand): Effect.Effect<void, Error, ArxivClient | Ar5ivClient | PubmedClient | CrossrefClient> => {
   switch (command.tag) {
     case "help":
       return showHelp
@@ -77,8 +81,54 @@ const runCommand = (command: CliCommand): Effect.Effect<void, Error, ArxivClient
           Console.error(formatArxivError(error)).pipe(Effect.andThen(Effect.fail(new Error(error.message))))
         )
       )
+    case "get":
+      return getPaper(command).pipe(
+        Effect.flatMap((markdown) => Console.log(markdown)),
+        Effect.catch((error) =>
+          Console.error(formatGetError(error)).pipe(Effect.andThen(Effect.fail(new Error(formatGetError(error)))))
+        )
+      )
+    case "refs":
+      return getReferences(command).pipe(
+        Effect.flatMap((output) => Console.log(output)),
+        Effect.catch((error) =>
+          Console.error(formatRefsError(error)).pipe(Effect.andThen(Effect.fail(new Error(formatRefsError(error)))))
+        )
+      )
     default:
       return Effect.fail(new Error(`not implemented: ${command.tag}`))
+  }
+}
+
+const getPaper = (command: Extract<CliCommand, { readonly tag: "get" }>): Effect.Effect<string, GetError, ArxivClient | Ar5ivClient | PubmedClient | CrossrefClient> => {
+  switch (command.id.tag) {
+    case "arxiv":
+      return getArxivPaper({
+        id: command.id.id,
+        cache: command.cache,
+        refs: command.refs,
+        tldr: command.tldr,
+        detailed: command.detailed,
+        range: command.range,
+      })
+    case "pubmed":
+      return getPubmedPaper({
+        id: command.id.id,
+        cache: command.cache,
+        refs: command.refs,
+        tldr: command.tldr,
+        detailed: command.detailed,
+        range: command.range,
+      })
+    case "doi":
+      return getDoiPaper({
+        id: command.id.id,
+        cache: command.cache,
+        refs: command.refs,
+        tldr: command.tldr,
+        detailed: command.detailed,
+        range: command.range,
+      })
   }
 }
 
@@ -134,6 +184,38 @@ const formatArxivError = (error: ArxivError): string => {
   }
 }
 
+const formatAr5ivError = (error: Ar5ivError): string => {
+  switch (error._tag) {
+    case "Ar5ivHttpError":
+      return `error: ar5iv upstream failure: ${error.message}`
+    case "Ar5ivTransientError":
+      return `error: ar5iv upstream failure: ${error.message}`
+    case "Ar5ivTimeoutError":
+      return `error: ar5iv upstream failure: ${error.message}`
+    case "Ar5ivDecodeError":
+      return `error: ar5iv decode failure: ${error.message}`
+  }
+}
+
+const formatGetError = (error: GetError): string => {
+  switch (error._tag) {
+    case "GetCacheReadError":
+      return `error: cache failure: ${error.message}`
+    case "GetCacheWriteError":
+      return `error: cache failure: ${error.message}`
+    case "GetRangeError":
+      return `error: ${error.message}`
+    case "GetArxivError":
+      return formatArxivError(error.error)
+    case "GetAr5ivError":
+      return formatAr5ivError(error.error)
+    case "GetPubmedError":
+      return formatPubmedError(error.error)
+    case "GetCrossrefError":
+      return formatCrossrefError(error.error)
+  }
+}
+
 const formatPubmedError = (error: PubmedError): string => {
   switch (error._tag) {
     case "PubmedHttpError":
@@ -147,12 +229,34 @@ const formatPubmedError = (error: PubmedError): string => {
   }
 }
 
+const formatCrossrefError = (error: CrossrefError): string => {
+  switch (error._tag) {
+    case "CrossrefHttpError":
+      return `error: Crossref upstream failure: ${error.message}`
+    case "CrossrefTransientError":
+      return `error: Crossref upstream failure: ${error.message}`
+    case "CrossrefTimeoutError":
+      return `error: Crossref upstream failure: ${error.message}`
+    case "CrossrefDecodeError":
+      return `error: Crossref decode failure: ${error.message}`
+  }
+}
+
+const formatRefsError = (error: RefsError): string => {
+  switch (error._tag) {
+    case "RefsHttpError":
+      return `error: Semantic Scholar failure: ${error.message}`
+    case "RefsDecodeError":
+      return `error: Semantic Scholar decode failure: ${error.message}`
+  }
+}
+
 const parsed = parseCliArgs(process.argv.slice(2))
 
 const program = parsed.ok
   ? runCommand(parsed.command)
   : Console.error(`error: ${parsed.error}`).pipe(Effect.andThen(Effect.fail(new Error(parsed.error))))
 
-NodeRuntime.runMain(program.pipe(Effect.provide(ArxivLive), Effect.provide(PubmedLive), Effect.provide(NodeServices.layer)), {
+NodeRuntime.runMain(program.pipe(Effect.provide(ArxivLive), Effect.provide(Ar5ivLive), Effect.provide(PubmedLive), Effect.provide(CrossrefLive), Effect.provide(NodeServices.layer)), {
   disableErrorReporting: true,
 })
