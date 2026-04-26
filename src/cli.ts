@@ -4,12 +4,17 @@ import { Console, Effect } from "effect"
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { Ar5ivClient, Ar5ivLive, type Ar5ivError } from "./ar5iv.js"
 import { ArxivClient, ArxivLive, type ArxivError, type ArxivSearchResult } from "./arxiv.js"
+import { browseCachedPapers, type BrowseError } from "./browse.js"
+import { clearCachedPapers, listCachedPapers, type CacheClearResult, type CacheError, type CacheListResult } from "./cache.js"
 import { CrossrefClient, CrossrefLive, type CrossrefError } from "./crossref.js"
 import { getArxivPaper, getDoiPaper, getPubmedPaper, type GetError } from "./get.js"
 import type { CliCommand } from "./parser.js"
 import { parseCliArgs } from "./parser.js"
 import { PubmedClient, PubmedLive, type PubmedError, type PubmedSearchResult } from "./pubmed.js"
+import { RepositoryDiscoveryClient, RepositoryDiscoveryLive, type RepositoryDiscoveryError, type RepositoryDiscoveryResult } from "./repo.js"
 import { getReferences, type RefsError } from "./refs.js"
+import { SemanticScholarClient, SemanticScholarLive, type SemanticScholarError } from "./semanticScholar.js"
+import { exportAllPapersToVault, exportPaperToVault, initVault, type VaultError, type VaultExportAllResult, type VaultExportResult, type VaultInitResult } from "./vault.js"
 
 export const VERSION = "0.6.0-beta.0"
 
@@ -60,7 +65,7 @@ Examples:
   paper7 vault all
 `)
 
-const runCommand = (command: CliCommand): Effect.Effect<void, Error, ArxivClient | Ar5ivClient | PubmedClient | CrossrefClient> => {
+const runCommand = (command: CliCommand): Effect.Effect<void, Error, ArxivClient | Ar5ivClient | PubmedClient | CrossrefClient | SemanticScholarClient | RepositoryDiscoveryClient> => {
   switch (command.tag) {
     case "help":
       return showHelp
@@ -95,8 +100,57 @@ const runCommand = (command: CliCommand): Effect.Effect<void, Error, ArxivClient
           Console.error(formatRefsError(error)).pipe(Effect.andThen(Effect.fail(new Error(formatRefsError(error)))))
         )
       )
+    case "repo":
+      return RepositoryDiscoveryClient.use((client) => client.discover(command.id)).pipe(
+        Effect.flatMap((result) => Console.log(renderRepositoryDiscovery(result))),
+        Effect.catch((error) =>
+          Console.error(formatRepositoryDiscoveryError(error)).pipe(Effect.andThen(Effect.fail(new Error(formatRepositoryDiscoveryError(error)))))
+        )
+      )
+    case "list":
+      return listCachedPapers().pipe(
+        Effect.flatMap((result) => Console.log(renderCacheList(result))),
+        Effect.catch((error) =>
+          Console.error(formatCacheError(error)).pipe(Effect.andThen(Effect.fail(new Error(formatCacheError(error)))))
+        )
+      )
+    case "cache-clear":
+      return clearCachedPapers(command.id).pipe(
+        Effect.flatMap((result) => Console.log(renderCacheClear(result))),
+        Effect.catch((error) =>
+          Console.error(formatCacheError(error)).pipe(Effect.andThen(Effect.fail(new Error(formatCacheError(error)))))
+        )
+      )
+    case "vault-init":
+      return initVault(command.path).pipe(
+        Effect.flatMap((result) => Console.log(renderVaultInit(result))),
+        Effect.catch((error) =>
+          Console.error(formatVaultError(error)).pipe(Effect.andThen(Effect.fail(new Error(formatVaultError(error)))))
+        )
+      )
+    case "vault-export":
+      return exportPaperToVault(command.id).pipe(
+        Effect.flatMap((result) => Console.log(renderVaultExport(result))),
+        Effect.catch((error) =>
+          Console.error(formatVaultError(error)).pipe(Effect.andThen(Effect.fail(new Error(formatVaultError(error)))))
+        )
+      )
+    case "vault-all":
+      return exportAllPapersToVault().pipe(
+        Effect.flatMap((result) => Console.log(renderVaultExportAll(result))),
+        Effect.catch((error) =>
+          Console.error(formatVaultError(error)).pipe(Effect.andThen(Effect.fail(new Error(formatVaultError(error)))))
+        )
+      )
+    case "browse":
+      return browseCachedPapers().pipe(
+        Effect.flatMap((result) => Console.log(result)),
+        Effect.catch((error) =>
+          Console.error(formatBrowseError(error)).pipe(Effect.andThen(Effect.fail(new Error(formatBrowseError(error)))))
+        )
+      )
     default:
-      return Effect.fail(new Error(`not implemented: ${command.tag}`))
+      return Effect.fail(new Error("not implemented"))
   }
 }
 
@@ -165,6 +219,62 @@ export const renderArxivSearch = (query: string, max: number, result: ArxivSearc
 
   return lines.join("\n")
 }
+
+export const renderRepositoryDiscovery = (result: RepositoryDiscoveryResult): string => {
+  const lines: Array<string> = [...result.warnings]
+  if (result.candidates.length === 0) {
+    if (lines.length > 0) lines.push("")
+    lines.push("No repositories found")
+    return lines.join("\n")
+  }
+
+  if (lines.length > 0) lines.push("")
+  lines.push(`Found ${result.candidates.length} repository candidate${result.candidates.length === 1 ? "" : "s"}:`, "")
+  for (const candidate of result.candidates) {
+    const official = candidate.isOfficial === true ? " official" : ""
+    const name = candidate.name === undefined ? "" : ` ${candidate.name}`
+    lines.push(`  [${candidate.source}${official}]${name}`)
+    lines.push(`  ${candidate.url}`)
+    lines.push("")
+  }
+  return lines.join("\n")
+}
+
+export const renderCacheList = (result: CacheListResult): string => {
+  const lines: Array<string> = [...result.warnings]
+  if (result.entries.length === 0) {
+    if (lines.length > 0) lines.push("")
+    lines.push("No cached papers")
+    return lines.join("\n")
+  }
+
+  if (lines.length > 0) lines.push("")
+  lines.push(`Cached papers (${result.entries.length}):`, "")
+  for (const entry of result.entries) {
+    lines.push(`  [${entry.id}] ${entry.title}`)
+    if (entry.authors !== undefined) lines.push(`  ${truncateAuthors(entry.authors)}`)
+    if (entry.url !== undefined) lines.push(`  ${entry.url}`)
+    lines.push("")
+  }
+  return lines.join("\n")
+}
+
+export const renderCacheClear = (result: CacheClearResult): string => {
+  switch (result._tag) {
+    case "cleared-all":
+      return "Cleared paper7 cache"
+    case "cleared-one":
+      return `Cleared cache for ${result.id}`
+    case "missing":
+      return result.id === undefined ? "No paper7 cache found" : `No cache entry for ${result.id}`
+  }
+}
+
+export const renderVaultInit = (result: VaultInitResult): string => `Configured vault: ${result.path}`
+
+export const renderVaultExport = (result: VaultExportResult): string => `Exported ${result.id} to ${result.path}`
+
+export const renderVaultExportAll = (result: VaultExportAllResult): string => `Exported ${result.count} papers to ${result.path}`
 
 const truncateAuthors = (authors: string): string => {
   if (authors.length <= 60) return authors
@@ -244,10 +354,72 @@ const formatCrossrefError = (error: CrossrefError): string => {
 
 const formatRefsError = (error: RefsError): string => {
   switch (error._tag) {
-    case "RefsHttpError":
+    case "RefsSemanticScholarError":
+      return formatSemanticScholarError(error.error)
+  }
+}
+
+const formatSemanticScholarError = (error: SemanticScholarError): string => {
+  switch (error._tag) {
+    case "SemanticScholarHttpError":
       return `error: Semantic Scholar failure: ${error.message}`
-    case "RefsDecodeError":
+    case "SemanticScholarNotFoundError":
+      return `error: ${error.message}`
+    case "SemanticScholarRateLimitError":
+      return error.retryAfter === undefined
+        ? `error: Semantic Scholar rate limit exceeded`
+        : `error: Semantic Scholar rate limit exceeded; retry after ${error.retryAfter}`
+    case "SemanticScholarTransientError":
+      return `error: Semantic Scholar upstream failure: ${error.message}`
+    case "SemanticScholarTimeoutError":
+      return `error: Semantic Scholar upstream failure: ${error.message}`
+    case "SemanticScholarDecodeError":
       return `error: Semantic Scholar decode failure: ${error.message}`
+  }
+}
+
+const formatRepositoryDiscoveryError = (error: RepositoryDiscoveryError): string => {
+  switch (error._tag) {
+    case "PapersWithCodeHttpError":
+      return `error: Papers With Code failure: ${error.message}`
+    case "PapersWithCodeTransientError":
+      return `error: Papers With Code upstream failure: ${error.message}`
+    case "PapersWithCodeTimeoutError":
+      return `error: Papers With Code upstream failure: ${error.message}`
+    case "PapersWithCodeDecodeError":
+      return `error: Papers With Code decode failure: ${error.message}`
+  }
+}
+
+const formatCacheError = (error: CacheError): string => {
+  switch (error._tag) {
+    case "CacheFsError":
+      return `error: cache failure: ${error.message}`
+  }
+}
+
+const formatBrowseError = (error: BrowseError): string => {
+  switch (error._tag) {
+    case "BrowseCacheError":
+      return formatCacheError(error.error)
+    case "BrowseInvalidSelection":
+      return `error: ${error.message}`
+    case "BrowseCacheMissing":
+    case "BrowseCacheMalformed":
+    case "BrowseIoError":
+      return `error: ${error.message}`
+  }
+}
+
+const formatVaultError = (error: VaultError): string => {
+  switch (error._tag) {
+    case "VaultConfigMissing":
+    case "VaultInvalidPath":
+    case "VaultCacheMissing":
+    case "VaultCacheMalformed":
+      return `error: vault export failed: ${error.message}`
+    case "VaultFsError":
+      return `error: vault export failed: ${error.message}`
   }
 }
 
@@ -257,6 +429,6 @@ const program = parsed.ok
   ? runCommand(parsed.command)
   : Console.error(`error: ${parsed.error}`).pipe(Effect.andThen(Effect.fail(new Error(parsed.error))))
 
-NodeRuntime.runMain(program.pipe(Effect.provide(ArxivLive), Effect.provide(Ar5ivLive), Effect.provide(PubmedLive), Effect.provide(CrossrefLive), Effect.provide(NodeServices.layer)), {
+NodeRuntime.runMain(program.pipe(Effect.provide(ArxivLive), Effect.provide(Ar5ivLive), Effect.provide(PubmedLive), Effect.provide(CrossrefLive), Effect.provide(SemanticScholarLive), Effect.provide(RepositoryDiscoveryLive), Effect.provide(NodeServices.layer)), {
   disableErrorReporting: true,
 })
