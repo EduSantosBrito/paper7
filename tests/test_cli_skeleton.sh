@@ -7,7 +7,7 @@ PAPER7="${PAPER7:-node dist/cli.js}"
 FAILED=0
 
 pass() { echo "PASS: $1"; }
-fail() { echo "FAIL: $1"; ((FAILED++)); }
+fail() { echo "FAIL: $1"; FAILED=$((FAILED + 1)); }
 
 # Build first
 echo "Building..."
