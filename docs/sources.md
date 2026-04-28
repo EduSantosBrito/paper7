@@ -11,7 +11,7 @@ Conventions throughout:
 
 ## Upstream assumptions and network behavior
 
-- Upstreams are treated as unavailable by default in CI. Default tests use local fixtures; live API smoke tests are opt-in through source-specific environment flags such as `PAPER7_LIVE_ARXIV=1`, `PAPER7_LIVE_PUBMED=1`, and `PAPER7_LIVE_S2_REFS=1`.
+- Upstreams are treated as unavailable by default in CI. Default tests use local fixtures or fake HTTP layers; live API checks stay opt-in and outside default CI.
 - HTTP clients use bounded timeouts and bounded retry loops for transient failures. Invalid user input is rejected before network access.
 - arXiv, PubMed, Crossref, Semantic Scholar, and Papers with Code responses are untrusted external data. Rendered paper bodies are wrapped with trust-boundary markers before reaching agent-facing output.
 - Crossref polite-pool access uses `edu.santos.brito@gmail.com` as the maintainer-owned contact email for npm releases.
@@ -204,5 +204,5 @@ Use this template for the next source (bioRxiv, OpenAlex, etc.):
 2. Extend the typed CLI/parser boundary if the source uses a new command, flag, or ID shape.
 3. Wire the source into the relevant command path — search/get/refs as applicable. Keep existing arXiv, PubMed, and DOI behavior byte-identical for regression safety.
 4. Add a section to this file with the same headings (Purpose, Endpoints used, Response format, Rate limits, Auth, Known gaps, Upstream docs).
-5. Add a `tests/test_<source>.sh` smoke suite. Detect rate-limit (429) and skip rather than fail.
+5. Add deterministic `@effect/vitest` coverage with fixtures or fake HTTP layers. Keep live upstream checks opt-in and outside default CI.
 6. Update `README.md` Usage and CLI reference blocks; update `llms.txt` if the source affects LLM-agent behavior.

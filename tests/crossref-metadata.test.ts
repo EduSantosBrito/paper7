@@ -6,12 +6,12 @@ describe("crossref metadata", () => {
   it("uses CROSSREF_POLITE_POOL_EMAIL in request URL", async () => {
     let capturedUrl: string | undefined
 
-    const fakeFetch: typeof fetch = (url) => {
+    const fakeFetch = (url: string, _init: { readonly signal: AbortSignal }): Promise<Response> => {
       capturedUrl = String(url)
       return Promise.resolve(new Response("{}", { status: 200 }))
     }
 
-    const client = makeCrossrefClient({ fetchImpl: fakeFetch as unknown as (url: string, init: { readonly signal: AbortSignal }) => Promise<Response> })
+    const client = makeCrossrefClient({ fetchImpl: fakeFetch })
     await client.get("10.5555/test").pipe(Effect.runPromiseExit)
 
     expect(capturedUrl).toBeDefined()

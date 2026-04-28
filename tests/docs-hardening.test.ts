@@ -1,5 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
+import { Effect } from "effect"
 import { existsSync, readFileSync } from "node:fs"
+import { getBenchmarkReport, renderBenchmarkMarkdownTable } from "../src/benchmark.js"
 
 const readText = (path: string): string => readFileSync(path, "utf8")
 
@@ -66,9 +68,9 @@ describe("docs hardening", () => {
 
     expect(testsReadme).toContain("bun run test")
     expect(testsReadme).toContain("@effect/vitest")
-    expect(testsReadme).toMatch(/Default test path[\s\S]*does not run.*test_.*\.sh/i)
-    expect(testsReadme).toMatch(/Live smoke.*PAPER7_LIVE_/i)
-    expect(testsReadme).toMatch(/Process parity.*opt-in/i)
+    expect(testsReadme).toMatch(/Default test path[\s\S]*@effect\/vitest/i)
+    expect(testsReadme).toMatch(/Live upstream checks are not part of the default suite/i)
+    expect(testsReadme).not.toMatch(/test_.*\.sh|PAPER7_LIVE|PAPER7=\/path/)
     expect(testsReadme).not.toMatch(/for t in tests\/test_\*\.sh/)
 
     for (const scenario of requiredScenarios) {
@@ -87,4 +89,36 @@ describe("docs hardening", () => {
     expect(readme).toContain("[MIT](LICENSE)")
     expect(existsSync("LICENSE")).toBe(true)
   })
+
+  it("documents benchmark via package command, not shell runner", () => {
+    const readme = readText("README.md")
+    const benchmarkReadme = readText("benchmark/README.md")
+
+    expect(readme).toContain("bun run benchmark")
+    expect(benchmarkReadme).toContain("bun run benchmark")
+    expect(readme).toContain("bun run benchmark:live")
+    expect(benchmarkReadme).toContain("bun run benchmark:live")
+    expect(readme).not.toContain("benchmark/run.sh")
+    expect(benchmarkReadme).not.toContain("benchmark/run.sh")
+    expect(readme).not.toContain("./benchmark/run.sh")
+    expect(benchmarkReadme).not.toContain("./benchmark/run.sh")
+    expect(readme).not.toMatch(/run_benchmark|run-benchmark|benchmark\.sh/)
+    expect(benchmarkReadme).not.toMatch(/run_benchmark|run-benchmark|benchmark\.sh/)
+  })
+
+  it.effect("README benchmark table matches deterministic output", () =>
+    Effect.gen(function* () {
+      const report = yield* getBenchmarkReport()
+      const expectedRows = renderBenchmarkMarkdownTable(report, { boldPercentages: false })
+      const readme = readText("README.md")
+      expect(readme).toContain(expectedRows)
+    }))
+
+  it.effect("benchmark/README.md benchmark table matches deterministic output", () =>
+    Effect.gen(function* () {
+      const report = yield* getBenchmarkReport()
+      const expectedRows = renderBenchmarkMarkdownTable(report, { boldPercentages: true })
+      const benchmarkReadme = readText("benchmark/README.md")
+      expect(benchmarkReadme).toContain(expectedRows)
+    }))
 })

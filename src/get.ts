@@ -5,7 +5,7 @@ import { Ar5ivClient, type Ar5ivError } from "./ar5iv.js"
 import { ArxivClient, type ArxivError, type ArxivPaperMetadata } from "./arxiv.js"
 import { cacheDir, safeDoiDir, writeCacheMeta } from "./cache.js"
 import { CrossrefClient, type CrossrefError, type CrossrefPaperMetadata } from "./crossref.js"
-import type { PaperIdentifier, RangeSpec } from "./parser.js"
+import type { CliCommand, PaperIdentifier, RangeSpec } from "./parser.js"
 import { PubmedClient, type PubmedError, type PubmedPaperMetadata } from "./pubmed.js"
 import { SemanticScholarClient } from "./semanticScholar.js"
 
@@ -482,3 +482,35 @@ const decodeEntities = (input: string): string =>
 
 const escapeAttribute = (input: string): string =>
   input.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+
+export const getPaper = (command: Extract<CliCommand, { readonly tag: "get" }>): Effect.Effect<string, GetError, ArxivClient | Ar5ivClient | PubmedClient | CrossrefClient | SemanticScholarClient> => {
+  switch (command.id.tag) {
+    case "arxiv":
+      return getArxivPaper({
+        id: command.id.id,
+        cache: command.cache,
+        refs: command.refs,
+        tldr: command.tldr,
+        detailed: command.detailed,
+        range: command.range,
+      })
+    case "pubmed":
+      return getPubmedPaper({
+        id: command.id.id,
+        cache: command.cache,
+        refs: command.refs,
+        tldr: command.tldr,
+        detailed: command.detailed,
+        range: command.range,
+      })
+    case "doi":
+      return getDoiPaper({
+        id: command.id.id,
+        cache: command.cache,
+        refs: command.refs,
+        tldr: command.tldr,
+        detailed: command.detailed,
+        range: command.range,
+      })
+  }
+}

@@ -69,9 +69,10 @@ const listCachedPapersAt = (cache: string): Effect.Effect<CacheListResult, Cache
         const kind = kindFromDir(dirname)
         const dir = join(cache, dirname)
         const meta = await readMeta(dir)
-        const paper = await readPaperMarkdown(dir)
 
         if (meta._tag === "malformed") warnings.push(`warning: skipping malformed metadata in ${dirname}`)
+
+        const paper = meta._tag === "ok" || kind === "doi" ? undefined : await readPaperMarkdown(dir)
 
         const entry = entryFromCache(dirname, kind, meta, paper)
         if (entry === undefined) {

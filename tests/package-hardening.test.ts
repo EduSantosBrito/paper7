@@ -55,6 +55,26 @@ describe("package hardening", () => {
     expect(scripts.test).not.toMatch(/test_.*\.sh|PAPER7_LIVE|curl|bash/)
   })
 
+  it("has a deterministic benchmark script", () => {
+    const scripts = stringRecord(record(packageJson).scripts)
+
+    expect(scripts.benchmark).toBe("tsx src/benchmark.ts")
+    expect(scripts.benchmark).not.toMatch(/run\.sh|curl|bash|live/)
+  })
+
+  it("has an explicit live benchmark script", () => {
+    const scripts = stringRecord(record(packageJson).scripts)
+
+    expect(scripts["benchmark:live"]).toBe("tsx src/benchmark.ts --live")
+  })
+
+  it("has a deterministic CLI perf benchmark script", () => {
+    const scripts = stringRecord(record(packageJson).scripts)
+
+    expect(scripts["benchmark:cli"]).toBe("tsx src/cliPerformanceBenchmark.ts")
+    expect(scripts["benchmark:cli"]).not.toMatch(/run\.sh|curl|bash|live/)
+  })
+
   it("keeps runtime deps small and shell-free", () => {
     const pkg = record(packageJson)
     const dependencies = Object.keys(stringRecord(pkg.dependencies)).sort()
@@ -70,5 +90,9 @@ describe("package hardening", () => {
     const license = readText("LICENSE")
     expect(license).toContain("MIT License")
     expect(license).toContain("Copyright (c)")
+  })
+
+  it("does not ship old shell benchmark runner", () => {
+    expect(existsSync("benchmark/run.sh")).toBe(false)
   })
 })

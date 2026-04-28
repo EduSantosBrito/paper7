@@ -1,6 +1,6 @@
 # paper7 tests
 
-Default test path: `bun run test` runs the deterministic `@effect/vitest` suite and does not run `tests/test_*.sh` shell smoke scripts. Default tests use fake services, fixtures, `Command.runWith`, and Effect test services; they must not require network access.
+Default test path: `bun run test` runs the deterministic `@effect/vitest` suite. Default tests use fake services, fixtures, `Command.runWith`, and Effect test services; they must not require network access.
 
 ## Run
 
@@ -16,16 +16,14 @@ bun run test -- tests/search.test.ts
 
 ## Opt-In Checks
 
-Live smoke checks are not part of the default suite. Run a retained shell smoke script only when deliberately checking an upstream and set the source-specific `PAPER7_LIVE_` flag documented by that script, for example `PAPER7_LIVE_ARXIV=1 tests/test_arxiv_search.sh`.
-
-Process parity checks are opt-in and narrow. Use retained `tests/test_*.sh` scripts only for manual built-process parity against `PAPER7=/path/to/paper7`; do not add them to `bun run test` or default CI.
+Live upstream checks are not part of the default suite. Add explicit Vitest suites or ad-hoc local commands for deliberate upstream checks; do not add them to `bun run test` or default CI.
 
 ## Migration Matrix
 
 | Former shell scenario | Deterministic replacement |
 | --- | --- |
 | CLI skeleton | `tests/cli-skeleton.test.ts` covers root help/version, app-level stdio, and package metadata checks. |
-| Typed CLI boundary | `tests/cli-skeleton.test.ts`, command suites using `Command.runWith`, and domain parser coverage in command tests replace `parseCliArgs` contract tests. |
+| Typed CLI boundary | `tests/cli-skeleton.test.ts`, command suites using `Command.runWith`, and domain parser coverage in command tests. |
 | arXiv search | `tests/search.test.ts` uses fake arXiv clients and decode-error fixtures. |
 | PubMed search | `tests/search.test.ts` uses fake PubMed clients and decode-error fixtures. |
 | arXiv get | `tests/get.test.ts` uses fake arXiv, ar5iv, cache, render, and Semantic Scholar services. |

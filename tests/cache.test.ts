@@ -98,6 +98,38 @@ const writeMalformedEntry = (cacheRoot: string, dirname: string, markdown: strin
     await writeFile(join(dir, "paper.md"), markdown, { encoding: "utf8" })
   })
 
+const writeEntryNoMeta = (cacheRoot: string, dirname: string, markdown: string) =>
+  Effect.promise(async () => {
+    const dir = join(cacheRoot, dirname)
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, "paper.md"), markdown, { encoding: "utf8" })
+  })
+
+const writeEntryWithUnreadablePaper = (
+  cacheRoot: string,
+  dirname: string,
+  meta: { readonly id: string; readonly title: string; readonly authors: string; readonly url: string }
+) =>
+  Effect.promise(async () => {
+    const dir = join(cacheRoot, dirname)
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, "meta.json"), JSON.stringify(meta), { encoding: "utf8" })
+    await mkdir(join(dir, "paper.md"), { recursive: true })
+  })
+
+const writeSearchCacheEntry = (cacheRoot: string, source: "arxiv" | "pubmed") =>
+  Effect.promise(async () => {
+    const dir = join(cacheRoot, "search", source)
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, "test-envelope.json"), JSON.stringify({ test: true }), { encoding: "utf8" })
+  })
+
+const searchCacheExists = (cacheRoot: string, source: "arxiv" | "pubmed") =>
+  Effect.promise(() => readFile(join(cacheRoot, "search", source, "test-envelope.json")).then(
+    () => true,
+    () => false
+  ))
+
 const pathExists = (path: string) =>
   Effect.promise(() => readFile(path).then(
     () => true,
@@ -162,6 +194,36 @@ describe("cache commands", () => {
       expect(result.stdout).not.toContain("[doi:")
     })))
 
+  it.effect("uses metadata fast path and does not read paper.md when meta.json is valid", () =>
+    withTempCache((cacheRoot) => Effect.gen(function*() {
+      yield* writeEntryWithUnreadablePaper(cacheRoot, "2401.04088", {
+        id: "2401.04088",
+        title: "Fast Path Paper",
+        authors: "Ada Lovelace",
+        url: "https://arxiv.org/abs/2401.04088"
+      })
+
+      const result = yield* runRootWith(cacheRoot, ["list"])
+
+      expect(result.exit._tag).toBe("Success")
+      expect(result.stderr).toBe("")
+      expect(result.stdout).toContain("Cached papers (1):")
+      expect(result.stdout).toContain("[2401.04088] Fast Path Paper")
+    })))
+
+  it.effect("falls back to markdown parsing when meta.json is missing", () =>
+    withTempCache((cacheRoot) => Effect.gen(function*() {
+      yield* writeEntryNoMeta(cacheRoot, "2401.04088", "# Fallback Title\n\n**Authors:** Fallback Author\n**arXiv:** https://arxiv.org/abs/2401.04088\n")
+
+      const result = yield* runRootWith(cacheRoot, ["list"])
+
+      expect(result.exit._tag).toBe("Success")
+      expect(result.stderr).toBe("")
+      expect(result.stdout).toContain("Cached papers (1):")
+      expect(result.stdout).toContain("[2401.04088] Fallback Title")
+      expect(result.stdout).toContain("Fallback Author")
+    })))
+
   it.effect("clears one typed cache identifier and reports missing on repeat", () =>
     withTempCache((cacheRoot) => Effect.gen(function*() {
       yield* writeEntry(cacheRoot, "pmid-38903003", {
@@ -217,5 +279,59 @@ describe("cache commands", () => {
       expect(existsAfterClear).toBe(false)
       expect(missing.exit._tag).toBe("Success")
       expect(missing.stdout).toBe("No paper7 cache found")
+    })))
+
+  it.effect("full cache clear removes paper cache and search cache entries", () =>
+    withTempCache((cacheRoot) => Effect.gen(function*() {
+      yield* writeEntry(cacheRoot, "2401.04088", {
+        id: "2401.04088",
+        title: "Fixture Get Paper",
+        authors: "Ada Lovelace",
+        url: "https://arxiv.org/abs/2401.04088"
+      }, "# Fixture Get Paper\n")
+      yield* writeSearchCacheEntry(cacheRoot, "arxiv")
+      yield* writeSearchCacheEntry(cacheRoot, "pubmed")
+
+      const cleared = yield* runRootWith(cacheRoot, ["cache", "clear"])
+      const paperExistsAfter = yield* pathExists(join(cacheRoot, "2401.04088", "meta.json"))
+      const arxivSearchExistsAfter = yield* searchCacheExists(cacheRoot, "arxiv")
+      const pubmedSearchExistsAfter = yield* searchCacheExists(cacheRoot, "pubmed")
+
+      expect(cleared.exit._tag).toBe("Success")
+      expect(cleared.stdout).toBe("Cleared paper7 cache")
+      expect(paperExistsAfter).toBe(false)
+      expect(arxivSearchExistsAfter).toBe(false)
+      expect(pubmedSearchExistsAfter).toBe(false)
+    })))
+
+  it.effect("per-paper cache clear removes only the requested paper and preserves search cache", () =>
+    withTempCache((cacheRoot) => Effect.gen(function*() {
+      yield* writeEntry(cacheRoot, "2401.04088", {
+        id: "2401.04088",
+        title: "Fixture Get Paper",
+        authors: "Ada Lovelace",
+        url: "https://arxiv.org/abs/2401.04088"
+      }, "# Fixture Get Paper\n")
+      yield* writeEntry(cacheRoot, "pmid-38903003", {
+        id: "pmid:38903003",
+        title: "Fixture PubMed Paper",
+        authors: "Grace Hopper",
+        url: "https://pubmed.ncbi.nlm.nih.gov/38903003/"
+      }, "# Fixture PubMed Paper\n")
+      yield* writeSearchCacheEntry(cacheRoot, "arxiv")
+      yield* writeSearchCacheEntry(cacheRoot, "pubmed")
+
+      const cleared = yield* runRootWith(cacheRoot, ["cache", "clear", "2401.04088"])
+      const arxivPaperExistsAfter = yield* pathExists(join(cacheRoot, "2401.04088", "meta.json"))
+      const pubmedPaperExistsAfter = yield* pathExists(join(cacheRoot, "pmid-38903003", "meta.json"))
+      const arxivSearchExistsAfter = yield* searchCacheExists(cacheRoot, "arxiv")
+      const pubmedSearchExistsAfter = yield* searchCacheExists(cacheRoot, "pubmed")
+
+      expect(cleared.exit._tag).toBe("Success")
+      expect(cleared.stdout).toBe("Cleared cache for 2401.04088")
+      expect(arxivPaperExistsAfter).toBe(false)
+      expect(pubmedPaperExistsAfter).toBe(true)
+      expect(arxivSearchExistsAfter).toBe(true)
+      expect(pubmedSearchExistsAfter).toBe(true)
     })))
 })

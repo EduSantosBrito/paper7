@@ -11,7 +11,12 @@
     "dist/"
   ],
   "scripts": {
+    "benchmark": "tsx src/benchmark.ts",
+    "benchmark:live": "tsx src/benchmark.ts --live",
+    "benchmark:cli": "tsx src/cliPerformanceBenchmark.ts",
     "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "dev:built": "node dist/cli.js",
     "sandcastle": "bun .sandcastle/main.ts --local",
     "test": "vitest run"
   },
@@ -19,15 +24,15 @@
     "effect": "4.0.0-beta.51",
     "@effect/platform-node": "4.0.0-beta.51"
   },
-  "overrides": {
-    "@effect/platform-node-shared": "4.0.0-beta.51"
-  },
   "devDependencies": {
     "@effect/vitest": "4.0.0-beta.51",
-    "@ai-hero/sandcastle": "^0.5.4",
+    "@ai-hero/sandcastle": "0.5.4",
     "tsx": "^4.21.0",
     "typescript": "^5.8.0",
     "vitest": "^3.2.4"
+  },
+  "patchedDependencies": {
+    "@ai-hero/sandcastle@0.5.4": "patches/@ai-hero%2Fsandcastle@0.5.4.patch"
   },
   "engines": {
     "node": ">=24.0.0"

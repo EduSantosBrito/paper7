@@ -2,7 +2,8 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { NodeRuntime, NodeServices } from "@effect/platform-node";
+import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as sandcastle from "@ai-hero/sandcastle";
 import type { AgentProvider } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
@@ -11,14 +12,42 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
-const outerIterations = 10;
+// === PER-REPO CONFIGURATION ===
+const repoName = "paper7";
+const dockerImageName = `sandcastle:${repoName}`;
+const dockerfileHashLabel = `${repoName}.sandcastle.dockerfile-sha256`;
+const tempPrefix = `${repoName}-opencode-`;
+const githubRepo = process.env.SANDCASTLE_GITHUB_REPO ?? "EduSantosBrito/paper7";
+
+const repoDocs = "Follow the repository and workspace instructions already loaded by the agent.";
+
+const typeSafetyRules = "no `any`, no non-null assertions, no type assertions. Use Effect v4 APIs and repo patterns for async, resourceful, or fallible code.";
+
+const feedbackLoops = [
+  "`bun run build`",
+  "`bun run test`",
+].join("\n");
+
+const verifyStep = "";
+
+const buildCmd = "`bun run build` and targeted tests";
+
+const repoPromptArgs = {
+  REPO_DOCS: repoDocs,
+  TYPE_SAFETY_RULES: typeSafetyRules,
+  FEEDBACK_LOOPS: feedbackLoops,
+  VERIFY_STEP: verifyStep,
+} as const;
+
+// === CONSTANTS ===
+const outerIterations = 100;
 const agentIterations = 100;
+const agentIdleTimeoutSeconds = 30 * 60;
 const completionSignal = "<promise>COMPLETE</promise>";
-const dockerImageName = "sandcastle:paper7";
-const dockerfileHashLabel = "paper7.sandcastle.dockerfile-sha256";
 const dockerfile = join(process.cwd(), ".sandcastle", "Dockerfile");
 const jjRepoDir = join(process.cwd(), ".jj");
 const completedDir = join(process.cwd(), ".sandcastle", "completed");
+const planPromptFile = ".sandcastle/plan-prompt.md";
 const implementPromptFile = ".sandcastle/implement-prompt.md";
 const reviewPromptFile = ".sandcastle/review-prompt.md";
 const mergePromptFile = ".sandcastle/merge-prompt.md";
@@ -30,10 +59,8 @@ const localPrdRoot = join(process.cwd(), "prds");
 const localIssueRoot = join(process.cwd(), "issues");
 const issueRootCandidates = [join(process.cwd(), "issues"), join(process.cwd(), ".plans")];
 const useLocalSources = process.argv.includes("--local");
-const planPromptFile = useLocalSources
-  ? ".sandcastle/plan-prompt-local.md"
-  : ".sandcastle/plan-prompt-default.md";
 
+// === TYPES ===
 type Issue = {
   readonly id: string;
   readonly title: string;
@@ -72,6 +99,15 @@ type Vcs =
       readonly type: "git";
     };
 
+type MergeTarget =
+  | {
+      readonly type: "jj-working-copy";
+    }
+  | {
+      readonly type: "git-branch";
+      readonly branch: string;
+    };
+
 class SandcastleError extends Data.TaggedError("SandcastleError")<{
   readonly message: string;
   readonly cause?: unknown;
@@ -82,22 +118,31 @@ const mapPlatformError = (message: string) => (cause: unknown) =>
 
 const shellEscape = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
 
-const sandboxedOpenCode = (model: string): AgentProvider => ({
+// === AGENT PROVIDER ===
+const sandboxedOpenCode = (model: string, variant?: string): AgentProvider => ({
   name: "opencode",
   env: {},
   captureSessions: false,
   buildPrintCommand: ({ prompt }) => ({
-    command: `opencode run --dangerously-skip-permissions --model ${shellEscape(model)} ${shellEscape(prompt)}`,
+    command: `opencode run --dangerously-skip-permissions --model ${shellEscape(model)}${variant ? ` --variant ${shellEscape(variant)}` : ""} ${shellEscape(prompt)}`,
   }),
   buildInteractiveArgs: ({ prompt }) => {
     const args = ["opencode", "--dangerously-skip-permissions", "--model", model];
+    if (variant) args.push("--variant", variant);
     if (prompt.length > 0) args.push("-p", prompt);
     return args;
   },
   parseStreamLine: () => [],
 });
 
+// === SHELL ===
 const command = (
+  binary: string,
+  args: ReadonlyArray<string>,
+): Effect.Effect<string, SandcastleError> => commandIn(process.cwd(), binary, args);
+
+const commandIn = (
+  cwd: string,
   binary: string,
   args: ReadonlyArray<string>,
 ): Effect.Effect<string, SandcastleError> =>
@@ -107,7 +152,7 @@ const command = (
         const child = execFile(
           binary,
           [...args],
-          { cwd: process.cwd(), encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
+          { cwd, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
           (error, stdout, stderr) => {
             if (error !== null) {
               reject(stderr.trim().length > 0 ? stderr.trim() : error);
@@ -130,8 +175,11 @@ const pathExists = Effect.fn("pathExists")(function* (path: string) {
 
 const git = (args: ReadonlyArray<string>) => command("git", args);
 
+const gitIn = (cwd: string, args: ReadonlyArray<string>) => commandIn(cwd, "git", args);
+
 const jj = (args: ReadonlyArray<string>) => command("jj", args);
 
+// === VCS ===
 const detectVcs = Effect.fn("detectVcs")(function* () {
   const isJjRepo = yield* pathExists(jjRepoDir);
   if (!isJjRepo) return { type: "git" } satisfies Vcs;
@@ -145,6 +193,21 @@ const syncJjFromGit = (vcs: Vcs) =>
 
 const syncJjToGit = (vcs: Vcs) =>
   vcs.type === "jj" ? jj(["git", "export"]).pipe(Effect.asVoid) : Effect.void;
+
+const currentGitTargetBranch = git(["rev-parse", "--abbrev-ref", "HEAD"]).pipe(
+  Effect.map((branch) => branch.trim()),
+  Effect.filterOrFail(
+    (branch) => branch.length > 0 && branch !== "HEAD",
+    () => new SandcastleError({ message: "Git Sandcastle runs must start from a named branch." }),
+  ),
+);
+
+const currentMergeTarget = (vcs: Vcs) =>
+  vcs.type === "jj"
+    ? Effect.succeed({ type: "jj-working-copy" } satisfies MergeTarget)
+    : currentGitTargetBranch.pipe(
+        Effect.map((branch) => ({ type: "git-branch", branch }) satisfies MergeTarget),
+      );
 
 const vcsInstructions = (vcs: Vcs) =>
   vcs.type === "jj"
@@ -181,30 +244,38 @@ const sourceInstructions = () =>
         "If the issue file is a local markdown path, treat that file as the source of truth.",
       ].join("\n");
 
-const mergeSteps = (vcs: Vcs) =>
-  vcs.type === "jj"
+const mergeSteps = (target: MergeTarget, build: string) =>
+  target.type === "jj-working-copy"
     ? [
-        "- If `.jj/` exists, run `jj git import`, then merge with `jj new @ {{BRANCH}}`.",
+        "- If `.jj/` exists, run `jj git import`.",
+        "- Rebase the current trunk working-copy stack onto the issue head with `jj rebase -s @ -d {{BRANCH}}`.",
+        "- The resulting order must be previous trunk ancestors, then the issue branch commits, then the original trunk working-copy commit.",
+        "- Do not use `jj new @ {{BRANCH}}`; that creates a merge commit and breaks trunk-based history.",
+        "- Before finishing, inspect the graph and ensure the issue commits are ancestors of `@`, not a sibling head beside trunk.",
         "- If there are conflicts, resolve them correctly by reading both sides, then run `jj resolve` as needed.",
-        "- Run relevant tests/build, usually `bun run build` and targeted tests.",
+        `- Run relevant tests/build, usually ${build}.`,
         "- If tests fail, fix them before finishing.",
-        "- Describe the merge change with a concise conventional message if needed.",
-        "- Leave the issue bookmark `{{BRANCH}}` on the implementation commit; do not move it to the merge commit.",
-        "- Run `jj git export` after the merge is complete.",
-        "- If `.jj/` does not exist, run `git merge {{BRANCH}} --no-edit` instead.",
+        "- Keep `@` at the rebased trunk head; do not move it back to the issue branch.",
+        "- Do not create a merge commit or separate integration commit.",
+        "- Verify `jj log -r 'heads(::@ & ::{{BRANCH}}) & merges()'` prints nothing for the integrated trunk stack.",
+        "- Verify `jj log -r '{{BRANCH}}..@'` includes the rebased trunk/reviewer commits above the issue head.",
+        "- Run `jj git export` after `@` points at the rebased trunk head so Git refs are synchronized.",
         "- Do not modify `.sandcastle`.",
         "- When complete, output {{COMPLETION_SIGNAL}}.",
       ].join("\n")
     : [
-        "- Run `git merge {{BRANCH}} --no-edit`.",
+        "- Run `git checkout {{BRANCH}}`.",
+        `- Rebase the issue branch onto trunk with \`git rebase ${target.branch}\`.`,
         "- If there are conflicts, resolve them correctly by reading both sides.",
-        "- Run relevant tests/build, usually `bun run build` and targeted tests.",
+        `- Run relevant tests/build, usually ${build}.`,
         "- If tests fail, fix them before finishing.",
-        "- Commit the completed merge if Git requires a commit.",
+        `- Advance trunk with \`git checkout ${target.branch}\` then \`git merge --ff-only {{BRANCH}}\`.`,
+        "- Do not run plain `git merge`; only fast-forward integration is allowed.",
         "- Do not modify `.sandcastle`.",
         "- When complete, output {{COMPLETION_SIGNAL}}.",
       ].join("\n");
 
+// === DOCKER ===
 const dockerImageLabel = (label: string) =>
   command("docker", [
     "image",
@@ -247,6 +318,7 @@ const ensureDockerImage = Effect.fn("ensureDockerImage")(function* () {
   ]).pipe(Effect.asVoid);
 });
 
+// === ISSUE LOADING ===
 const findIssueRoot = Effect.fn("findIssueRoot")(function* () {
   for (const candidate of issueRootCandidates) {
     const exists = yield* pathExists(candidate);
@@ -269,10 +341,6 @@ const titleFromMarkdown = (file: string, body: string) => {
 
   return heading?.replace(/^#\s+(?:\d{2,3}:\s*)?/, "").trim() || fallbackTitle;
 };
-
-const isAfkIssue = (body: string) => /^Type:\s*AFK\s*$/im.test(body);
-
-const isIssue = (issue: Issue | undefined): issue is Issue => issue !== undefined;
 
 const prdContext = (prds: ReadonlyArray<Prd>) =>
   prds.length === 0
@@ -335,10 +403,24 @@ const blockedByOpenIssue = (issue: GitHubIssue, openIssueNumbers: ReadonlySet<nu
   return false;
 };
 
+const loadCompletedIssueIds = Effect.fn("loadCompletedIssueIds")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const exists = yield* pathExists(completedDir);
+  if (!exists) return new Set<string>();
+
+  const files = yield* fs
+    .readDirectory(completedDir)
+    .pipe(Effect.mapError(mapPlatformError(`Failed to read ${completedDir}`)));
+
+  return new Set(files);
+});
+
 const loadGitHubIssues = Effect.fn("loadGitHubIssues")(function* () {
   const text = yield* command("gh", [
     "issue",
     "list",
+    "--repo",
+    githubRepo,
     "--state",
     "open",
     "--label",
@@ -349,10 +431,15 @@ const loadGitHubIssues = Effect.fn("loadGitHubIssues")(function* () {
     "number,title,body",
   ]);
   const issues = yield* parseGitHubIssues(text);
-  const openIssueNumbers = new Set(issues.map((issue) => issue.number));
+  const completedIssueIds = yield* loadCompletedIssueIds();
+  const blockingOpenIssueNumbers = new Set(
+    issues
+      .filter((issue) => !completedIssueIds.has(String(issue.number)))
+      .map((issue) => issue.number),
+  );
 
   return issues
-    .filter((issue) => !blockedByOpenIssue(issue, openIssueNumbers))
+    .filter((issue) => !blockedByOpenIssue(issue, blockingOpenIssueNumbers))
     .toSorted((left, right) => left.number - right.number)
     .map(
       (issue) =>
@@ -402,7 +489,7 @@ const loadLocalIssues = Effect.fn("loadLocalIssues")(function* () {
     .readDirectory(localIssueRoot)
     .pipe(Effect.mapError(mapPlatformError(`Failed to read ${localIssueRoot}`)));
 
-  const loadedIssues = yield* Effect.forEach(
+  const issues = yield* Effect.forEach(
     files
       .flatMap((file) => {
         const issueFile = parseIssueFile(file);
@@ -415,8 +502,6 @@ const loadLocalIssues = Effect.fn("loadLocalIssues")(function* () {
           .readFileString(join(localIssueRoot, file))
           .pipe(Effect.mapError(mapPlatformError(`Failed to read ${file}`)));
 
-        if (!isAfkIssue(body)) return undefined;
-
         return {
           id,
           title: titleFromMarkdown(file, body),
@@ -425,10 +510,9 @@ const loadLocalIssues = Effect.fn("loadLocalIssues")(function* () {
         } satisfies Issue;
       }),
   );
-  const issues = loadedIssues.filter(isIssue);
 
   if (issues.length === 0) {
-    return yield* new SandcastleError({ message: `No AFK issue files found in ${localIssueRoot}` });
+    return yield* new SandcastleError({ message: `No issue files found in ${localIssueRoot}` });
   }
 
   return issues;
@@ -463,6 +547,7 @@ const loadIssues = Effect.fn("loadIssues")(function* () {
   );
 });
 
+// === COMPLETION TRACKING ===
 const completionMarker = (issue: Issue) => join(completedDir, issue.id);
 
 const isIssueComplete = (issue: Issue) => pathExists(completionMarker(issue));
@@ -478,6 +563,21 @@ const markIssueComplete = (issue: Issue) =>
       .pipe(Effect.mapError(mapPlatformError(`Failed to mark issue ${issue.id} complete`)));
   });
 
+const closeGitHubIssue = (issue: Issue, branch: string) => {
+  if (useLocalSources || issue.file !== `#${issue.id}`) return Effect.void;
+
+  return command("gh", [
+    "issue",
+    "close",
+    issue.id,
+    "--repo",
+    githubRepo,
+    "--comment",
+    `Completed by Sandcastle after merging ${branch}.`,
+  ]).pipe(Effect.asVoid);
+};
+
+// === MERGE CHECK ===
 const isMergedIntoHead = (branch: string, vcs: Vcs) =>
   vcs.type === "jj"
     ? syncJjFromGit(vcs).pipe(
@@ -492,11 +592,12 @@ const isMergedIntoHead = (branch: string, vcs: Vcs) =>
         Effect.catchTag("SandcastleError", () => Effect.succeed(false)),
       );
 
+// === OPENCODE STATE ===
 const createOpenCodeState = Effect.fn("createOpenCodeState")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const root = yield* fs
-    .makeTempDirectory({ directory: tmpdir(), prefix: "paper7-opencode-" })
-      .pipe(Effect.mapError(mapPlatformError("Failed to create OpenCode sandbox state")));
+    .makeTempDirectory({ directory: tmpdir(), prefix: tempPrefix })
+    .pipe(Effect.mapError(mapPlatformError("Failed to create OpenCode sandbox state")));
   const shareDir = join(root, "share", "opencode");
   const configDir = join(root, "config", "opencode");
 
@@ -566,6 +667,7 @@ const copyOpenCodeConfig: (
   },
 );
 
+// === UTILS ===
 const slugFor = (issue: Issue) =>
   issue.title
     .toLowerCase()
@@ -584,16 +686,46 @@ const nextIssue = Effect.fn("nextIssue")(function* () {
   return undefined;
 });
 
+// === AGENT RUNNER ===
 const runAgent = (options: Parameters<typeof sandcastle.run>[0]) =>
   Effect.tryPromise({
-    try: () => sandcastle.run(options),
+    try: () =>
+      sandcastle.run({
+        ...options,
+        idleTimeoutSeconds: options.idleTimeoutSeconds ?? agentIdleTimeoutSeconds,
+      }),
     catch: (cause) =>
       new SandcastleError({ message: `Sandcastle run failed: ${options.name ?? "agent"}`, cause }),
   });
 
+const commitPreservedWorktreeChanges = Effect.fn("commitPreservedWorktreeChanges")(function* (
+  agentName: string,
+  result: { readonly preservedWorktreePath?: string },
+) {
+  const worktreePath = result.preservedWorktreePath;
+  if (worktreePath === undefined) return false;
+
+  const status = yield* gitIn(worktreePath, ["status", "--porcelain"]);
+  if (status.trim().length === 0) return false;
+
+  yield* Console.log(`[${agentName}] Committing uncommitted verification changes.`);
+  yield* gitIn(worktreePath, ["add", "--all"]);
+
+  const stagedFiles = yield* gitIn(worktreePath, ["diff", "--cached", "--name-only"]);
+  if (stagedFiles.trim().length === 0) return false;
+
+  yield* gitIn(worktreePath, ["commit", "-m", `chore: include ${agentName} verification changes`]);
+  return true;
+});
+
+// === PROGRAM ===
 const program = Effect.gen(function* () {
-  const agent = sandboxedOpenCode("openai/gpt-5.5");
+  const plannerAgent = sandboxedOpenCode("openai/gpt-5.5", "medium");
+  const implementerAgent = sandboxedOpenCode("kimi-for-coding/k2p6");
+  const reviewerAgent = sandboxedOpenCode("deepseek/deepseek-v4-pro", "max");
+  const mergerAgent = sandboxedOpenCode("openai/gpt-5.5", "medium");
   const vcs = yield* detectVcs();
+  const mergeTarget = yield* currentMergeTarget(vcs);
 
   yield* Effect.acquireUseRelease(
     createOpenCodeState(),
@@ -628,61 +760,73 @@ const program = Effect.gen(function* () {
 
           yield* syncJjToGit(vcs);
 
-          const implementation = yield* runAgent({
-            agent,
+          const basePromptArgs = {
+            ISSUE_FILE: issue.file,
+            ISSUE_BODY: issue.body,
+            ISSUE_TITLE: issue.title,
+            BRANCH: branch,
+            SOURCE_INSTRUCTIONS: sourceInstructions(),
+            VCS_INSTRUCTIONS: vcsInstructions(vcs).replaceAll("{{BRANCH}}", branch),
+            COMPLETION_SIGNAL: completionSignal,
+            ...repoPromptArgs,
+          };
+
+          // Planner
+          const plan = yield* runAgent({
+            agent: plannerAgent,
             sandbox,
-            name: "implementer",
+            name: "planner",
             branchStrategy: { type: "branch", branch },
-            promptFile: implementPromptFile,
-            promptArgs: {
-              ISSUE_FILE: issue.file,
-              ISSUE_BODY: issue.body,
-              ISSUE_TITLE: issue.title,
-              BRANCH: branch,
-              SOURCE_INSTRUCTIONS: sourceInstructions(),
-              VCS_INSTRUCTIONS: vcsInstructions(vcs).replaceAll("{{BRANCH}}", branch),
-              COMPLETION_SIGNAL: completionSignal,
-            },
-            maxIterations: agentIterations,
+            promptFile: planPromptFile,
+            promptArgs: basePromptArgs,
+            maxIterations: 4,
             completionSignal,
           });
 
           yield* Console.log(`${issue.id}: ${issue.title} -> ${branch}`);
 
-          if (implementation.commits.length > 0) {
-            yield* runAgent({
-              agent,
+          // Implementer
+          const implementation = yield* runAgent({
+            agent: implementerAgent,
+            sandbox,
+            name: "implementer",
+            branchStrategy: { type: "branch", branch },
+            promptFile: implementPromptFile,
+            promptArgs: { ...basePromptArgs, PLAN: plan.stdout },
+            maxIterations: agentIterations,
+            completionSignal,
+          });
+
+          const implementationVerificationCommit = yield* commitPreservedWorktreeChanges(
+            "implementer",
+            implementation,
+          );
+
+          // Reviewer
+          if (implementation.commits.length > 0 || implementationVerificationCommit) {
+            const review = yield* runAgent({
+              agent: reviewerAgent,
               sandbox,
               name: "reviewer",
               branchStrategy: { type: "branch", branch },
               promptFile: reviewPromptFile,
-              promptArgs: {
-                ISSUE_FILE: issue.file,
-                ISSUE_BODY: issue.body,
-                ISSUE_TITLE: issue.title,
-                BRANCH: branch,
-                SOURCE_INSTRUCTIONS: sourceInstructions(),
-                VCS_INSTRUCTIONS: vcsInstructions(vcs).replaceAll("{{BRANCH}}", branch),
-                REVIEW_COMMANDS: reviewCommands(vcs),
-                COMPLETION_SIGNAL: completionSignal,
-              },
+              promptArgs: { ...basePromptArgs, REVIEW_COMMANDS: reviewCommands(vcs) },
               maxIterations: agentIterations,
               completionSignal,
             });
+
+            yield* commitPreservedWorktreeChanges("reviewer", review);
           }
 
+          // Merger
           yield* runAgent({
-            agent,
+            agent: mergerAgent,
             sandbox,
             name: "merger",
             promptFile: mergePromptFile,
             promptArgs: {
-              ISSUE_FILE: issue.file,
-              ISSUE_BODY: issue.body,
-              BRANCH: branch,
-              SOURCE_INSTRUCTIONS: sourceInstructions(),
-              VCS_INSTRUCTIONS: vcsInstructions(vcs).replaceAll("{{BRANCH}}", branch),
-              MERGE_STEPS: mergeSteps(vcs)
+              ...basePromptArgs,
+              MERGE_STEPS: mergeSteps(mergeTarget, buildCmd)
                 .replaceAll("{{BRANCH}}", branch)
                 .replaceAll("{{COMPLETION_SIGNAL}}", completionSignal),
             },
@@ -697,6 +841,7 @@ const program = Effect.gen(function* () {
             });
           }
 
+          yield* closeGitHubIssue(issue, branch);
           yield* markIssueComplete(issue);
           yield* Console.log("Merged completed branches.");
         }

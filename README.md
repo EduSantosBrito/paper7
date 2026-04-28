@@ -116,19 +116,19 @@ Tested with 5 landmark papers (Attention, RAG, Mixtral, GPT-4, LoRA) — 169 pag
 
   Raw PDF       ████████████████████████████████████████████████  12,140KB
   HTML (ar5iv)  ██████████████████                                 2,522KB
-  paper7        ██                                                   349KB  (-97% vs PDF)
+  paper7        ██                                                   340KB  (-97% vs PDF)
 ```
 
 | Paper | Pages | PDF | HTML | paper7 | vs PDF | vs HTML |
 |-------|------:|----:|-----:|-------:|-------:|--------:|
-| Attention Is All You Need | 15 | 2,163KB | 343KB | 40KB | -98% | -88% |
+| Attention Is All You Need | 15 | 2,163KB | 343KB | 39KB | -98% | -88% |
 | RAG | 12 | 864KB | 301KB | 68KB | -92% | -77% |
-| Mixtral of Experts | 16 | 2,417KB | 216KB | 31KB | -98% | -85% |
-| GPT-4 Technical Report | 100 | 5,122KB | 635KB | 116KB | -97% | -81% |
-| LoRA | 26 | 1,571KB | 1,024KB | 91KB | -94% | -91% |
-| **Total** | **169** | **12,140KB** | **2,522KB** | **349KB** | **-97%** | **-86%** |
+| Mixtral of Experts | 16 | 2,417KB | 216KB | 32KB | -98% | -85% |
+| GPT-4 Technical Report | 100 | 5,122KB | 635KB | 117KB | -97% | -81% |
+| LoRA | 26 | 1,571KB | 1,024KB | 82KB | -94% | -91% |
+| **Total** | **169** | **12,140KB** | **2,522KB** | **340KB** | **-97%** | **-86%** |
 
-Reproduce with `./benchmark/run.sh`.
+Reproduce with `bun run benchmark`. Refresh upstream-derived artifacts with `bun run benchmark:live`.
 
 ## How it works
 

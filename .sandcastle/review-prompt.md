@@ -20,7 +20,9 @@ Read the diff carefully:
 
 - Relevant tests and modules touched by the diff
 
-Apply the repository and workspace instructions already loaded by the agent.
+Apply repo standards from:
+
+{{REPO_DOCS}}
 
 # REVIEW PROCESS
 
@@ -46,6 +48,8 @@ Improve code only when it preserves behavior and materially improves clarity, sa
 - Preserve exact intended behavior.
 - Do not modify `.sandcastle`.
 - Commit review changes only if you made changes.
+{{VERIFY_STEP}}
+- Do not signal completion with a dirty worktree; commit all verification changes first.
 
 If code is already clean, tested, and safe, do nothing.
 
