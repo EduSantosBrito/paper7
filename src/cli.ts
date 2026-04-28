@@ -8,6 +8,7 @@ import { Ar5ivClient, Ar5ivLive, type Ar5ivError } from "./ar5iv.js"
 import { ArxivClient, ArxivLive, type ArxivError, type ArxivSearchResult } from "./arxiv.js"
 import { browseCachedPapers, type BrowseError } from "./browse.js"
 import { CachePaths, CachePathsLive, clearCachedPapers, listCachedPapers, type CacheClearResult, type CacheError, type CacheListResult } from "./cache.js"
+import { CliValidationError } from "./cliValidation.js"
 import { CrossrefClient, CrossrefLive, type CrossrefError } from "./crossref.js"
 import { getArxivPaper, getDoiPaper, getPubmedPaper, type GetError } from "./get.js"
 import type { CliCommand, PaperIdentifier, RangeSpec } from "./parser.js"
@@ -39,19 +40,19 @@ const versionAlias = GlobalFlag.action({
     })
 })
 
-const parseIdentifierEffect = (commandName: string, rawId: string): Effect.Effect<PaperIdentifier, Error> => {
+const parseIdentifierEffect = (commandName: string, rawId: string): Effect.Effect<PaperIdentifier, CliValidationError> => {
   const id = parsePaperIdentifier(rawId)
   if (id !== undefined) return Effect.succeed(id)
-  if (rawId.startsWith("pmid:")) return Effect.fail(new Error(`invalid PubMed ID: ${rawId}`))
-  if (rawId.startsWith("doi:")) return Effect.fail(new Error(`invalid DOI: ${rawId}`))
-  return Effect.fail(new Error(`${commandName} invalid paper id: ${rawId}`))
+  if (rawId.startsWith("pmid:")) return Effect.fail(new CliValidationError({ message: `invalid PubMed ID: ${rawId}` }))
+  if (rawId.startsWith("doi:")) return Effect.fail(new CliValidationError({ message: `invalid DOI: ${rawId}` }))
+  return Effect.fail(new CliValidationError({ message: `${commandName} invalid paper id: ${rawId}` }))
 }
 
-const parseRangeEffect = (rawRange: Option.Option<string>): Effect.Effect<RangeSpec | undefined, Error> => {
+const parseRangeEffect = (rawRange: Option.Option<string>): Effect.Effect<RangeSpec | undefined, CliValidationError> => {
   if (Option.isNone(rawRange)) return Effect.succeed(undefined)
   const range = parseRangeSpec(rawRange.value)
   return range === undefined
-    ? Effect.fail(new Error("invalid range: expected START:END"))
+    ? Effect.fail(new CliValidationError({ message: "invalid range: expected START:END" }))
     : Effect.succeed(range)
 }
 
@@ -88,7 +89,7 @@ const getCommand = Command.make("get", {
   Effect.gen(function*() {
     const id = yield* parseIdentifierEffect("get", config.id)
     const range = yield* parseRangeEffect(config.range)
-    if (range !== undefined && !config.detailed) return yield* Effect.fail(new Error("--range requires --detailed"))
+    if (range !== undefined && !config.detailed) return yield* new CliValidationError({ message: "--range requires --detailed" })
     yield* runCommand({
       tag: "get",
       id,

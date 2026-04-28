@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 
 const readText = (path: string): string => readFileSync(path, "utf8")
 
@@ -63,5 +63,12 @@ describe("package hardening", () => {
     expect(dependencies).toEqual(["@effect/platform-node", "effect"])
     expect(bin).toMatch(/^dist\//)
     expect(readText("src/cli.ts")).not.toMatch(/child_process|spawn\(|exec\(/)
+  })
+
+  it("ships a root LICENSE file", () => {
+    expect(existsSync("LICENSE")).toBe(true)
+    const license = readText("LICENSE")
+    expect(license).toContain("MIT License")
+    expect(license).toContain("Copyright (c)")
   })
 })

@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Data, Effect, Layer } from "effect"
 import type { Input as DurationInput } from "effect/Duration"
 import { readFile } from "node:fs/promises"
 import type { PaperIdentifier } from "./parser.js"
@@ -25,13 +25,40 @@ export type S2RefsParams = {
   readonly max: number
 }
 
+export class SemanticScholarHttpError extends Data.TaggedError("SemanticScholarHttpError")<{
+  readonly status: number
+  readonly message: string
+}> {}
+
+export class SemanticScholarNotFoundError extends Data.TaggedError("SemanticScholarNotFoundError")<{
+  readonly message: string
+}> {}
+
+export class SemanticScholarRateLimitError extends Data.TaggedError("SemanticScholarRateLimitError")<{
+  readonly message: string
+  readonly retryAfter?: string
+}> {}
+
+export class SemanticScholarTransientError extends Data.TaggedError("SemanticScholarTransientError")<{
+  readonly message: string
+  readonly cause: unknown
+}> {}
+
+export class SemanticScholarTimeoutError extends Data.TaggedError("SemanticScholarTimeoutError")<{
+  readonly message: string
+}> {}
+
+export class SemanticScholarDecodeError extends Data.TaggedError("SemanticScholarDecodeError")<{
+  readonly message: string
+}> {}
+
 export type SemanticScholarError =
-  | { readonly _tag: "SemanticScholarHttpError"; readonly status: number; readonly message: string }
-  | { readonly _tag: "SemanticScholarNotFoundError"; readonly message: string }
-  | { readonly _tag: "SemanticScholarRateLimitError"; readonly message: string; readonly retryAfter?: string }
-  | { readonly _tag: "SemanticScholarTransientError"; readonly message: string; readonly cause: unknown }
-  | { readonly _tag: "SemanticScholarTimeoutError"; readonly message: string }
-  | { readonly _tag: "SemanticScholarDecodeError"; readonly message: string }
+  | SemanticScholarHttpError
+  | SemanticScholarNotFoundError
+  | SemanticScholarRateLimitError
+  | SemanticScholarTransientError
+  | SemanticScholarTimeoutError
+  | SemanticScholarDecodeError
 
 export type SemanticScholarClientShape = {
   readonly references: (params: S2RefsParams) => Effect.Effect<S2ReferencesResult, SemanticScholarError>
@@ -104,7 +131,7 @@ export const decodeReferences = (json: string, max: number): Effect.Effect<S2Ref
   const root = getRecord(parsed.value)
   const data = root === undefined ? undefined : getArray(root.data)
   if (data === undefined) {
-    return Effect.fail({ _tag: "SemanticScholarDecodeError", message: "Semantic Scholar references response missing data" })
+    return Effect.fail(new SemanticScholarDecodeError({ message: "Semantic Scholar references response missing data" }))
   }
 
   const references: Array<S2Reference> = []
@@ -143,15 +170,15 @@ const loadJson = (input: {
   if (fixturePath !== undefined) {
     return Effect.tryPromise({
       try: () => readFile(fixturePath, { encoding: "utf8" }),
-      catch: (cause): SemanticScholarError => ({ _tag: "SemanticScholarTransientError", message: `failed to read ${input.responseName} fixture`, cause }),
+      catch: (cause): SemanticScholarError => new SemanticScholarTransientError({ message: `failed to read ${input.responseName} fixture`, cause }),
     })
   }
 
   const request: Effect.Effect<Response, SemanticScholarError> = Effect.tryPromise({
     try: (signal) => fetchWithTimeout(input.fetchImpl, input.url, signal, input.timeoutMs),
     catch: (cause): SemanticScholarError => isAbortError(cause)
-      ? { _tag: "SemanticScholarTimeoutError", message: `Semantic Scholar request timed out after ${input.timeoutMs}ms` }
-      : { _tag: "SemanticScholarTransientError", message: "Semantic Scholar request failed", cause },
+      ? new SemanticScholarTimeoutError({ message: `Semantic Scholar request timed out after ${input.timeoutMs}ms` })
+      : new SemanticScholarTransientError({ message: "Semantic Scholar request failed", cause }),
   })
 
   return request.pipe(
@@ -159,41 +186,33 @@ const loadJson = (input: {
       if (response.ok) {
         return Effect.tryPromise({
           try: () => response.text(),
-          catch: (cause): SemanticScholarError => ({ _tag: "SemanticScholarTransientError", message: `failed to read ${input.responseName} response`, cause }),
+          catch: (cause): SemanticScholarError => new SemanticScholarTransientError({ message: `failed to read ${input.responseName} response`, cause }),
         })
       }
 
       if (response.status === 404) {
-        const error: SemanticScholarError = {
-          _tag: "SemanticScholarNotFoundError",
-          message: "no paper found on Semantic Scholar",
-        }
-        return Effect.fail(error)
+        return Effect.fail(new SemanticScholarNotFoundError({ message: "no paper found on Semantic Scholar" }))
       }
 
       if (response.status === 429) {
         const retryAfter = response.headers.get("retry-after") ?? undefined
-        const error: SemanticScholarError = retryAfter === undefined
-          ? { _tag: "SemanticScholarRateLimitError", message: "Semantic Scholar rate limit exceeded" }
-          : { _tag: "SemanticScholarRateLimitError", message: "Semantic Scholar rate limit exceeded", retryAfter }
-        return Effect.fail(error)
+        return Effect.fail(new SemanticScholarRateLimitError({
+          message: "Semantic Scholar rate limit exceeded",
+          ...(retryAfter !== undefined ? { retryAfter } : {})
+        }))
       }
 
       if (response.status === 408 || response.status >= 500) {
-        const error: SemanticScholarError = {
-          _tag: "SemanticScholarTransientError",
+        return Effect.fail(new SemanticScholarTransientError({
           message: `Semantic Scholar transient HTTP ${response.status}`,
           cause: response.status,
-        }
-        return Effect.fail(error)
+        }))
       }
 
-      const error: SemanticScholarError = {
-        _tag: "SemanticScholarHttpError",
+      return Effect.fail(new SemanticScholarHttpError({
         status: response.status,
         message: `Semantic Scholar HTTP ${response.status}`,
-      }
-      return Effect.fail(error)
+      }))
     })
   )
 }
@@ -302,7 +321,7 @@ const parseJson = (json: string):
   try {
     return { _tag: "ok", value: JSON.parse(json) }
   } catch {
-    return { _tag: "error", error: { _tag: "SemanticScholarDecodeError", message: "failed to decode Semantic Scholar references" } }
+    return { _tag: "error", error: new SemanticScholarDecodeError({ message: "failed to decode Semantic Scholar references" }) }
   }
 }
 

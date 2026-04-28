@@ -14,7 +14,7 @@ Conventions throughout:
 - Upstreams are treated as unavailable by default in CI. Default tests use local fixtures; live API smoke tests are opt-in through source-specific environment flags such as `PAPER7_LIVE_ARXIV=1`, `PAPER7_LIVE_PUBMED=1`, and `PAPER7_LIVE_S2_REFS=1`.
 - HTTP clients use bounded timeouts and bounded retry loops for transient failures. Invalid user input is rejected before network access.
 - arXiv, PubMed, Crossref, Semantic Scholar, and Papers with Code responses are untrusted external data. Rendered paper bodies are wrapped with trust-boundary markers before reaching agent-facing output.
-- Crossref polite-pool access requires a maintainer-owned contact email before publish. `paper7@example.com` is a placeholder and must not be used for a public npm release.
+- Crossref polite-pool access uses `edu.santos.brito@gmail.com` as the maintainer-owned contact email for npm releases.
 
 ---
 

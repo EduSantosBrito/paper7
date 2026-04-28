@@ -3,9 +3,9 @@ import { NodeServices } from "@effect/platform-node"
 import { Console, Effect } from "effect"
 import * as TestConsole from "effect/testing/TestConsole"
 import { CliOutput, Command } from "effect/unstable/cli"
-import { ArxivClient, decodeArxivFeed, makeArxivClient, type ArxivClientShape, type ArxivError } from "../src/arxiv.js"
+import { ArxivClient, ArxivDecodeError, ArxivTimeoutError, ArxivTransientError, decodeArxivFeed, makeArxivClient, type ArxivClientShape } from "../src/arxiv.js"
 import { rootCommand, VERSION } from "../src/cli.js"
-import { PubmedClient, decodeSearchResponse, makePubmedClient, type PubmedClientShape, type PubmedError } from "../src/pubmed.js"
+import { PubmedClient, PubmedDecodeError, PubmedHttpError, PubmedTransientError, decodeSearchResponse, makePubmedClient, type PubmedClientShape } from "../src/pubmed.js"
 
 const deterministicCliOutput = CliOutput.layer(CliOutput.defaultFormatter({ colors: false }))
 
@@ -72,8 +72,8 @@ const pubmedBadSearchJson = JSON.stringify({
   }
 })
 
-const unexpectedArxivGet: ArxivError = { _tag: "ArxivDecodeError", message: "unexpected get" }
-const unexpectedPubmedGet: PubmedError = { _tag: "PubmedDecodeError", message: "unexpected get" }
+const unexpectedArxivGet = new ArxivDecodeError({ message: "unexpected get" })
+const unexpectedPubmedGet = new PubmedDecodeError({ message: "unexpected get" })
 
 const failingArxivGet = () => Effect.fail(unexpectedArxivGet)
 const failingPubmedGet = () => Effect.fail(unexpectedPubmedGet)
@@ -91,12 +91,12 @@ const pubmedFixtureClient = makePubmedClient({
 })
 
 const unusedPubmedClient: PubmedClientShape = {
-  search: () => Effect.fail({ _tag: "PubmedDecodeError", message: "unexpected search" }),
+  search: () => Effect.fail(new PubmedDecodeError({ message: "unexpected search" })),
   get: failingPubmedGet
 }
 
 const unusedArxivClient: ArxivClientShape = {
-  search: () => Effect.fail({ _tag: "ArxivDecodeError", message: "unexpected search" }),
+  search: () => Effect.fail(new ArxivDecodeError({ message: "unexpected search" })),
   get: failingArxivGet
 }
 
@@ -186,6 +186,66 @@ describe("search command", () => {
       expect(result.stderr).toBe("error: PubMed decode failure: PubMed search response missing count or idlist")
     }))
 
+  it.effect("surfaces arXiv upstream failures deterministically", () =>
+    Effect.gen(function*() {
+      const result = yield* runRootWith(["search", "attention"], {
+        arxiv: {
+          search: () => Effect.fail(new ArxivTransientError({ message: "arXiv transient HTTP 500", cause: 500 })),
+          get: failingArxivGet
+        },
+        pubmed: unusedPubmedClient
+      })
+
+      expect(result.exit._tag).toBe("Failure")
+      expect(result.stderr).toBe("error: arXiv upstream failure: arXiv transient HTTP 500")
+    }))
+
+  it.effect("surfaces PubMed upstream failures deterministically", () =>
+    Effect.gen(function*() {
+      const result = yield* runRootWith(["search", "covid", "--source", "pubmed"], {
+        arxiv: unusedArxivClient,
+        pubmed: {
+          search: () => Effect.fail(new PubmedHttpError({ status: 503, message: "PubMed HTTP 503" })),
+          get: failingPubmedGet
+        }
+      })
+
+      expect(result.exit._tag).toBe("Failure")
+      expect(result.stderr).toBe("error: PubMed upstream failure: PubMed HTTP 503")
+    }))
+
+  it.effect("surfaces arXiv timeout failures from yieldable fake client", () =>
+    Effect.gen(function*() {
+      const result = yield* runRootWith(["search", "attention"], {
+        arxiv: {
+          search: () => Effect.gen(function*() {
+            yield* new ArxivTimeoutError({ message: "arXiv request timed out after 100ms" })
+          }),
+          get: failingArxivGet
+        },
+        pubmed: unusedPubmedClient
+      })
+
+      expect(result.exit._tag).toBe("Failure")
+      expect(result.stderr).toBe("error: arXiv upstream failure: arXiv request timed out after 100ms")
+    }))
+
+  it.effect("surfaces PubMed transient failures from yieldable fake client", () =>
+    Effect.gen(function*() {
+      const result = yield* runRootWith(["search", "covid", "--source", "pubmed"], {
+        arxiv: unusedArxivClient,
+        pubmed: {
+          search: () => Effect.gen(function*() {
+            yield* new PubmedTransientError({ message: "PubMed transient HTTP 500", cause: 500 })
+          }),
+          get: failingPubmedGet
+        }
+      })
+
+      expect(result.exit._tag).toBe("Failure")
+      expect(result.stderr).toBe("error: PubMed upstream failure: PubMed transient HTTP 500")
+    }))
+
   it.effect("rejects invalid search options through Effect CLI validation", () =>
     Effect.gen(function*() {
       const badSource = yield* runRootWith(["search", "attention", "--source", "crossref"], {
@@ -230,6 +290,33 @@ describe("search source clients", () => {
       expect(captured).toContain("search_query=all%3Agraph+neural")
     }))
 
+  it.effect("maps arXiv non-retryable HTTP errors to ArxivHttpError", () =>
+    Effect.gen(function*() {
+      const client = makeArxivClient({
+        fetchImpl: async () => new Response("bad request", { status: 400 }),
+        timeoutMs: 1_000,
+        retries: 0
+      })
+
+      const error = yield* client.search({ query: "test", max: 1, sort: "relevance" }).pipe(Effect.flip)
+      expect(error._tag).toBe("ArxivHttpError")
+      expect(error.message).toBe("arXiv HTTP 400")
+      expect(error.status).toBe(400)
+    }))
+
+  it.effect("maps arXiv retryable HTTP errors to ArxivTransientError", () =>
+    Effect.gen(function*() {
+      const client = makeArxivClient({
+        fetchImpl: async () => new Response("server error", { status: 500 }),
+        timeoutMs: 1_000,
+        retries: 0
+      })
+
+      const error = yield* client.search({ query: "test", max: 1, sort: "relevance" }).pipe(Effect.flip)
+      expect(error._tag).toBe("ArxivTransientError")
+      expect(error.message).toBe("arXiv transient HTTP 500")
+    }))
+
   it.effect("maps PubMed max, sort, query, and summary ids to API URLs", () =>
     Effect.gen(function*() {
       const captured: Array<string> = []
@@ -248,5 +335,32 @@ describe("search source clients", () => {
       expect(captured.join("\n")).toContain("sort=pub+date")
       expect(captured.join("\n")).toContain("term=heart+failure")
       expect(captured.join("\n")).toContain("id=38903003%2C38600001")
+    }))
+
+  it.effect("maps PubMed non-retryable HTTP errors to PubmedHttpError", () =>
+    Effect.gen(function*() {
+      const client = makePubmedClient({
+        fetchImpl: async () => new Response("bad request", { status: 400 }),
+        timeoutMs: 1_000,
+        retries: 0
+      })
+
+      const error = yield* client.search({ query: "test", max: 1, sort: "relevance" }).pipe(Effect.flip)
+      expect(error._tag).toBe("PubmedHttpError")
+      expect(error.message).toBe("PubMed HTTP 400")
+      expect(error.status).toBe(400)
+    }))
+
+  it.effect("maps PubMed retryable HTTP errors to PubmedTransientError", () =>
+    Effect.gen(function*() {
+      const client = makePubmedClient({
+        fetchImpl: async () => new Response("server error", { status: 500 }),
+        timeoutMs: 1_000,
+        retries: 0
+      })
+
+      const error = yield* client.search({ query: "test", max: 1, sort: "relevance" }).pipe(Effect.flip)
+      expect(error._tag).toBe("PubmedTransientError")
+      expect(error.message).toBe("PubMed transient HTTP 500")
     }))
 })

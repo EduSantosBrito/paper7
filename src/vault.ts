@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Data, Effect, Layer } from "effect"
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { cacheDirForIdentifierAt, listCachedPapers, type CacheError, CachePaths, type CachePaths as CachePathsContext } from "./cache.js"
@@ -12,12 +12,36 @@ export class VaultPaths extends Context.Service<VaultPaths, VaultPathsShape>()("
 
 export const VaultPathsLive = Layer.effect(VaultPaths, Effect.sync(() => ({ configPath: defaultConfigPath() })))
 
+export class VaultConfigMissing extends Data.TaggedError("VaultConfigMissing")<{
+  readonly message: string
+}> {}
+
+export class VaultInvalidPath extends Data.TaggedError("VaultInvalidPath")<{
+  readonly message: string
+  readonly path: string
+}> {}
+
+export class VaultCacheMissing extends Data.TaggedError("VaultCacheMissing")<{
+  readonly message: string
+  readonly id: string
+}> {}
+
+export class VaultCacheMalformed extends Data.TaggedError("VaultCacheMalformed")<{
+  readonly message: string
+  readonly id: string
+}> {}
+
+export class VaultFsError extends Data.TaggedError("VaultFsError")<{
+  readonly message: string
+  readonly cause: unknown
+}> {}
+
 export type VaultError =
-  | { readonly _tag: "VaultConfigMissing"; readonly message: string }
-  | { readonly _tag: "VaultInvalidPath"; readonly message: string; readonly path: string }
-  | { readonly _tag: "VaultCacheMissing"; readonly message: string; readonly id: string }
-  | { readonly _tag: "VaultCacheMalformed"; readonly message: string; readonly id: string }
-  | { readonly _tag: "VaultFsError"; readonly message: string; readonly cause: unknown }
+  | VaultConfigMissing
+  | VaultInvalidPath
+  | VaultCacheMissing
+  | VaultCacheMalformed
+  | VaultFsError
 
 export type VaultInitResult = {
   readonly path: string
@@ -42,7 +66,7 @@ type CacheMeta = {
 
 export const initVault = (inputPath: string): Effect.Effect<VaultInitResult, VaultError, VaultPaths> => {
   if (inputPath.trim() === "") {
-    return Effect.fail({ _tag: "VaultInvalidPath", message: "invalid vault path: <empty>", path: inputPath })
+    return Effect.fail(new VaultInvalidPath({ message: "invalid vault path: <empty>", path: inputPath }))
   }
 
   const vaultPath = normalizePath(inputPath)
@@ -66,8 +90,7 @@ export const exportAllPapersToVault = (): Effect.Effect<VaultExportAllResult, Va
           const exported = Effect.forEach(result.entries, (entry): Effect.Effect<VaultExportResult, VaultError, CachePathsContext> => {
             const id = parsePaperIdentifier(entry.id)
             if (id === undefined) {
-              const error: VaultError = { _tag: "VaultCacheMalformed", message: `invalid cached paper id: ${entry.id}`, id: entry.id }
-              return Effect.fail(error)
+              return Effect.fail(new VaultCacheMalformed({ message: `invalid cached paper id: ${entry.id}`, id: entry.id }))
             }
             return exportOne(vaultPath, id)
           })
@@ -83,8 +106,7 @@ const exportOne = (vaultPath: string, id: PaperIdentifier): Effect.Effect<VaultE
     Effect.flatMap(({ meta, markdown }) => {
       const target = safeTargetPath(vaultPath, formattedId)
       if (target === undefined) {
-        const error: VaultError = { _tag: "VaultCacheMalformed", message: `unsafe export path for ${formattedId}`, id: formattedId }
-        return Effect.fail(error)
+        return Effect.fail(new VaultCacheMalformed({ message: `unsafe export path for ${formattedId}`, id: formattedId }))
       }
       return writeVaultPaper(target, meta, markdown).pipe(Effect.as({ id: formattedId, path: target }))
     })
@@ -96,14 +118,13 @@ const loadVaultPath = (): Effect.Effect<string, VaultError, VaultPaths> =>
     Effect.tryPromise({
       try: () => readFile(paths.configPath, { encoding: "utf8" }),
       catch: (cause): VaultError => isMissing(cause)
-        ? { _tag: "VaultConfigMissing", message: "vault not configured; run paper7 vault init <path>" }
-        : { _tag: "VaultFsError", message: "failed to read vault config", cause },
+        ? new VaultConfigMissing({ message: "vault not configured; run paper7 vault init <path>" })
+        : new VaultFsError({ message: "failed to read vault config", cause }),
     }).pipe(
       Effect.flatMap((content) => {
         const path = parseVaultConfig(content)
         if (path === undefined) {
-          const error: VaultError = { _tag: "VaultConfigMissing", message: "vault not configured; run paper7 vault init <path>" }
-          return Effect.fail(error)
+          return Effect.fail(new VaultConfigMissing({ message: "vault not configured; run paper7 vault init <path>" }))
         }
         return validateVaultPath(path).pipe(Effect.as(path))
       })
@@ -117,7 +138,7 @@ const writeVaultConfig = (vaultPath: string): Effect.Effect<void, VaultError, Va
         await mkdir(dirname(paths.configPath), { recursive: true })
         await writeFile(paths.configPath, `PAPER7_VAULT=${vaultPath}\n`, { encoding: "utf8" })
       },
-      catch: (cause): VaultError => ({ _tag: "VaultFsError", message: "failed to write vault config", cause }),
+      catch: (cause): VaultError => new VaultFsError({ message: "failed to write vault config", cause }),
     })
   )
 
@@ -127,7 +148,7 @@ const validateVaultPath = (vaultPath: string): Effect.Effect<void, VaultError> =
       const info = await stat(vaultPath)
       if (!info.isDirectory()) throw new Error("not a directory")
     },
-    catch: (): VaultError => ({ _tag: "VaultInvalidPath", message: `invalid vault path: ${vaultPath}`, path: vaultPath }),
+    catch: (): VaultError => new VaultInvalidPath({ message: `invalid vault path: ${vaultPath}`, path: vaultPath }),
   })
 
 const readCachedPaper = (cacheDir: string, id: string): Effect.Effect<{ readonly meta: CacheMeta; readonly markdown: string }, VaultError> =>
@@ -138,8 +159,8 @@ const readCachedPaper = (cacheDir: string, id: string): Effect.Effect<{ readonly
       return { meta, markdown }
     },
     catch: (cause): VaultError => isMissing(cause)
-      ? { _tag: "VaultCacheMissing", message: `no cached paper for ${id}`, id }
-      : { _tag: "VaultFsError", message: `failed to read cached paper for ${id}`, cause },
+      ? new VaultCacheMissing({ message: `no cached paper for ${id}`, id })
+      : new VaultFsError({ message: `failed to read cached paper for ${id}`, cause }),
   })
 
 const readMeta = async (cacheDir: string, id: string): Promise<CacheMeta> => {
@@ -163,7 +184,7 @@ const readMeta = async (cacheDir: string, id: string): Promise<CacheMeta> => {
 const writeVaultPaper = (target: string, meta: CacheMeta, markdown: string): Effect.Effect<void, VaultError> =>
   Effect.tryPromise({
     try: () => writeFile(target, `${frontmatter(meta)}\n${markdown.trimEnd()}\n`, { encoding: "utf8" }),
-    catch: (cause): VaultError => ({ _tag: "VaultFsError", message: `failed to write vault paper: ${target}`, cause }),
+      catch: (cause): VaultError => new VaultFsError({ message: `failed to write vault paper: ${target}`, cause }),
   })
 
 const frontmatter = (meta: CacheMeta): string => [
@@ -218,7 +239,7 @@ const homeDir = (): string => process.env.HOME ?? "."
 
 const yamlScalar = (input: string): string => /^[A-Za-z0-9._:/ -]+$/.test(input) ? input : JSON.stringify(input)
 
-const cacheToVaultError = (error: CacheError): VaultError => ({ _tag: "VaultFsError", message: error.message, cause: error.cause })
+const cacheToVaultError = (error: CacheError): VaultError => new VaultFsError({ message: error.message, cause: error.cause })
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === "object" && value !== null && !Array.isArray(value)
 

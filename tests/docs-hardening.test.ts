@@ -75,4 +75,16 @@ describe("docs hardening", () => {
       expect(testsReadme).toContain(`| ${scenario} |`)
     }
   })
+
+  it("documents a real maintainer-owned Crossref email", () => {
+    const sources = readText("docs/sources.md")
+    expect(sources).not.toContain("paper7@example.com")
+    expect(sources).toContain("edu.santos.brito@gmail.com")
+  })
+
+  it("links README license to committed LICENSE file", () => {
+    const readme = readText("README.md")
+    expect(readme).toContain("[MIT](LICENSE)")
+    expect(existsSync("LICENSE")).toBe(true)
+  })
 })

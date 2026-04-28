@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Data, Effect, Layer } from "effect"
 import type { Input as DurationInput } from "effect/Duration"
 import { readFile } from "node:fs/promises"
 
@@ -6,6 +6,8 @@ const CROSSREF_URL = "https://api.crossref.org/works"
 const DEFAULT_TIMEOUT_MS = 5_000
 const DEFAULT_RETRIES = 2
 const DEFAULT_RETRY_DELAY: DurationInput = "150 millis"
+
+export const CROSSREF_POLITE_POOL_EMAIL = "edu.santos.brito@gmail.com"
 
 export type CrossrefPaperMetadata = {
   readonly id: string
@@ -18,11 +20,29 @@ export type CrossrefPaperMetadata = {
   readonly abstract: string
 }
 
+export class CrossrefHttpError extends Data.TaggedError("CrossrefHttpError")<{
+  readonly status: number
+  readonly message: string
+}> {}
+
+export class CrossrefTransientError extends Data.TaggedError("CrossrefTransientError")<{
+  readonly message: string
+  readonly cause: unknown
+}> {}
+
+export class CrossrefTimeoutError extends Data.TaggedError("CrossrefTimeoutError")<{
+  readonly message: string
+}> {}
+
+export class CrossrefDecodeError extends Data.TaggedError("CrossrefDecodeError")<{
+  readonly message: string
+}> {}
+
 export type CrossrefError =
-  | { readonly _tag: "CrossrefHttpError"; readonly status: number; readonly message: string }
-  | { readonly _tag: "CrossrefTransientError"; readonly message: string; readonly cause: unknown }
-  | { readonly _tag: "CrossrefTimeoutError"; readonly message: string }
-  | { readonly _tag: "CrossrefDecodeError"; readonly message: string }
+  | CrossrefHttpError
+  | CrossrefTransientError
+  | CrossrefTimeoutError
+  | CrossrefDecodeError
 
 export type CrossrefClientShape = {
   readonly get: (doi: string) => Effect.Effect<CrossrefPaperMetadata, CrossrefError>
@@ -59,7 +79,7 @@ export const makeCrossrefClient = (options: CrossrefClientOptions = {}): Crossre
         ? requestJson({ url: buildWorkUrl(apiUrl, doi), fetchImpl, timeoutMs })
         : Effect.tryPromise({
             try: () => readFile(fixturePath, { encoding: "utf8" }),
-            catch: (cause): CrossrefError => ({ _tag: "CrossrefTransientError", message: "failed to read Crossref fixture", cause }),
+            catch: (cause): CrossrefError => new CrossrefTransientError({ message: "failed to read Crossref fixture", cause }),
           })
 
       return retryTransient(json, retries, retryDelay).pipe(Effect.flatMap((body) => decodeCrossrefWork(doi, body)))
@@ -79,7 +99,7 @@ export const decodeCrossrefWork = (doi: string, json: string): Effect.Effect<Cro
   const root = getRecord(parsed.value)
   const message = root === undefined ? undefined : getRecord(root.message)
   if (message === undefined) {
-    return Effect.fail({ _tag: "CrossrefDecodeError", message: "Crossref response missing message" })
+    return Effect.fail(new CrossrefDecodeError({ message: "Crossref response missing message" }))
   }
 
   const canonicalDoi = cleanText(getString(message.DOI)) ?? doi
@@ -91,7 +111,7 @@ export const decodeCrossrefWork = (doi: string, json: string): Effect.Effect<Cro
   const abstract = cleanAbstract(getString(message.abstract)) ?? `(no abstract available; full text at ${fullTextUrl})`
 
   if (title === undefined || authors.length === 0 || fullTextUrl === undefined) {
-    return Effect.fail({ _tag: "CrossrefDecodeError", message: `Crossref response has invalid paper ${doi}` })
+    return Effect.fail(new CrossrefDecodeError({ message: `Crossref response has invalid paper ${doi}` }))
   }
 
   return Effect.succeed({
@@ -114,8 +134,8 @@ const requestJson = (input: {
   const request: Effect.Effect<Response, CrossrefError> = Effect.tryPromise({
     try: (signal) => fetchWithTimeout(input.fetchImpl, input.url, signal, input.timeoutMs),
     catch: (cause): CrossrefError => isAbortError(cause)
-      ? { _tag: "CrossrefTimeoutError", message: `Crossref request timed out after ${input.timeoutMs}ms` }
-      : { _tag: "CrossrefTransientError", message: "Crossref request failed", cause },
+      ? new CrossrefTimeoutError({ message: `Crossref request timed out after ${input.timeoutMs}ms` })
+      : new CrossrefTransientError({ message: "Crossref request failed", cause }),
   })
 
   return request.pipe(
@@ -123,17 +143,15 @@ const requestJson = (input: {
       if (response.ok) {
         return Effect.tryPromise({
           try: () => response.text(),
-          catch: (cause): CrossrefError => ({ _tag: "CrossrefTransientError", message: "failed to read Crossref response", cause }),
+          catch: (cause): CrossrefError => new CrossrefTransientError({ message: "failed to read Crossref response", cause }),
         })
       }
 
       if (response.status === 408 || response.status === 429 || response.status >= 500) {
-        const error: CrossrefError = { _tag: "CrossrefTransientError", message: `Crossref transient HTTP ${response.status}`, cause: response.status }
-        return Effect.fail(error)
+        return Effect.fail(new CrossrefTransientError({ message: `Crossref transient HTTP ${response.status}`, cause: response.status }))
       }
 
-      const error: CrossrefError = { _tag: "CrossrefHttpError", status: response.status, message: `Crossref HTTP ${response.status}` }
-      return Effect.fail(error)
+      return Effect.fail(new CrossrefHttpError({ status: response.status, message: `Crossref HTTP ${response.status}` }))
     })
   )
 }
@@ -170,7 +188,7 @@ const fetchWithTimeout = (
 
 const buildWorkUrl = (apiUrl: string, doi: string): string => {
   const url = new URL(`${apiUrl.replace(/\/$/, "")}/${encodeURIComponent(doi)}`)
-  url.searchParams.set("mailto", "paper7@example.com")
+  url.searchParams.set("mailto", CROSSREF_POLITE_POOL_EMAIL)
   return url.toString()
 }
 
@@ -180,7 +198,7 @@ const parseJson = (json: string):
   try {
     return { _tag: "ok", value: JSON.parse(json) }
   } catch {
-    return { _tag: "error", error: { _tag: "CrossrefDecodeError", message: "Crossref response is not valid JSON" } }
+    return { _tag: "error", error: new CrossrefDecodeError({ message: "Crossref response is not valid JSON" }) }
   }
 }
 

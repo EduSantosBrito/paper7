@@ -6,43 +6,43 @@ import { CliOutput, Command } from "effect/unstable/cli"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Ar5ivClient, type Ar5ivClientShape } from "../src/ar5iv.js"
-import { ArxivClient, type ArxivClientShape } from "../src/arxiv.js"
+import { Ar5ivClient, Ar5ivDecodeError, type Ar5ivClientShape } from "../src/ar5iv.js"
+import { ArxivClient, ArxivDecodeError, type ArxivClientShape } from "../src/arxiv.js"
 import { CachePaths } from "../src/cache.js"
 import { rootCommand, VERSION } from "../src/cli.js"
-import { CrossrefClient, type CrossrefClientShape } from "../src/crossref.js"
-import { PubmedClient, type PubmedClientShape } from "../src/pubmed.js"
-import { RepositoryDiscoveryClient, type RepositoryDiscoveryClientShape } from "../src/repo.js"
-import { SemanticScholarClient, type SemanticScholarClientShape } from "../src/semanticScholar.js"
+import { CrossrefClient, CrossrefDecodeError, type CrossrefClientShape } from "../src/crossref.js"
+import { PubmedClient, PubmedDecodeError, type PubmedClientShape } from "../src/pubmed.js"
+import { PapersWithCodeDecodeError, RepositoryDiscoveryClient, type RepositoryDiscoveryClientShape } from "../src/repo.js"
+import { SemanticScholarClient, SemanticScholarDecodeError, type SemanticScholarClientShape } from "../src/semanticScholar.js"
 import { VaultPaths } from "../src/vault.js"
 
 const deterministicCliOutput = CliOutput.layer(CliOutput.defaultFormatter({ colors: false }))
 
 const unusedArxiv: ArxivClientShape = {
-  search: () => Effect.fail({ _tag: "ArxivDecodeError", message: "unexpected search" }),
-  get: () => Effect.fail({ _tag: "ArxivDecodeError", message: "unexpected get" })
+  search: () => Effect.fail(new ArxivDecodeError({ message: "unexpected search" })),
+  get: () => Effect.fail(new ArxivDecodeError({ message: "unexpected get" }))
 }
 
 const unusedAr5iv: Ar5ivClientShape = {
-  getHtml: () => Effect.fail({ _tag: "Ar5ivDecodeError", message: "unexpected get" })
+  getHtml: () => Effect.fail(new Ar5ivDecodeError({ message: "unexpected get" }))
 }
 
 const unusedPubmed: PubmedClientShape = {
-  search: () => Effect.fail({ _tag: "PubmedDecodeError", message: "unexpected search" }),
-  get: () => Effect.fail({ _tag: "PubmedDecodeError", message: "unexpected get" })
+  search: () => Effect.fail(new PubmedDecodeError({ message: "unexpected search" })),
+  get: () => Effect.fail(new PubmedDecodeError({ message: "unexpected get" }))
 }
 
 const unusedCrossref: CrossrefClientShape = {
-  get: () => Effect.fail({ _tag: "CrossrefDecodeError", message: "unexpected get" })
+  get: () => Effect.fail(new CrossrefDecodeError({ message: "unexpected get" }))
 }
 
 const unusedSemanticScholar: SemanticScholarClientShape = {
-  references: () => Effect.fail({ _tag: "SemanticScholarDecodeError", message: "unexpected references" }),
-  tldr: () => Effect.fail({ _tag: "SemanticScholarDecodeError", message: "unexpected tldr" })
+  references: () => Effect.fail(new SemanticScholarDecodeError({ message: "unexpected references" })),
+  tldr: () => Effect.fail(new SemanticScholarDecodeError({ message: "unexpected tldr" }))
 }
 
 const unusedRepositoryDiscovery: RepositoryDiscoveryClientShape = {
-  discover: () => Effect.fail({ _tag: "PapersWithCodeDecodeError", message: "unexpected discover" })
+  discover: () => Effect.fail(new PapersWithCodeDecodeError({ message: "unexpected discover" }))
 }
 
 const runRootWith = (cacheRoot: string, configPath: string, args: ReadonlyArray<string>) =>

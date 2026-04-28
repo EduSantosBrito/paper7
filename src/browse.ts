@@ -1,15 +1,38 @@
-import { Effect, Option, Stdio, Stream } from "effect"
+import { Data, Effect, Option, Stdio, Stream } from "effect"
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { cacheDirForIdentifierAt, CachePaths, listCachedPapers, type CacheEntry, type CacheError } from "./cache.js"
 import { parsePaperIdentifier } from "./parser.js"
 
+export class BrowseCacheError extends Data.TaggedError("BrowseCacheError")<{
+  readonly error: CacheError
+}> {}
+
+export class BrowseInvalidSelection extends Data.TaggedError("BrowseInvalidSelection")<{
+  readonly message: string
+}> {}
+
+export class BrowseCacheMissing extends Data.TaggedError("BrowseCacheMissing")<{
+  readonly message: string
+  readonly id: string
+}> {}
+
+export class BrowseCacheMalformed extends Data.TaggedError("BrowseCacheMalformed")<{
+  readonly message: string
+  readonly id: string
+}> {}
+
+export class BrowseIoError extends Data.TaggedError("BrowseIoError")<{
+  readonly message: string
+  readonly cause: unknown
+}> {}
+
 export type BrowseError =
-  | { readonly _tag: "BrowseCacheError"; readonly error: CacheError }
-  | { readonly _tag: "BrowseInvalidSelection"; readonly message: string }
-  | { readonly _tag: "BrowseCacheMissing"; readonly message: string; readonly id: string }
-  | { readonly _tag: "BrowseCacheMalformed"; readonly message: string; readonly id: string }
-  | { readonly _tag: "BrowseIoError"; readonly message: string; readonly cause: unknown }
+  | BrowseCacheError
+  | BrowseInvalidSelection
+  | BrowseCacheMissing
+  | BrowseCacheMalformed
+  | BrowseIoError
 
 type Selection =
   | { readonly _tag: "cancelled" }
@@ -17,7 +40,7 @@ type Selection =
 
 export const browseCachedPapers = (): Effect.Effect<string, BrowseError, CachePaths | Stdio.Stdio> =>
   listCachedPapers().pipe(
-    Effect.mapError((error): BrowseError => ({ _tag: "BrowseCacheError", error })),
+    Effect.mapError((error): BrowseError => new BrowseCacheError({ error })),
     Effect.flatMap((result) => {
       if (result.entries.length === 0) return Effect.succeed("No papers cached")
       return promptForSelection(result.entries).pipe(
@@ -25,8 +48,7 @@ export const browseCachedPapers = (): Effect.Effect<string, BrowseError, CachePa
           if (selection._tag === "cancelled") return Effect.succeed("Browse cancelled")
           const entry = result.entries[selection.index]
           if (entry === undefined) {
-            const error: BrowseError = { _tag: "BrowseInvalidSelection", message: "invalid selection" }
-            return Effect.fail(error)
+            return Effect.fail(new BrowseInvalidSelection({ message: "invalid selection" }))
           }
           return readSelectedPaper(entry)
         })
@@ -49,15 +71,15 @@ const promptForSelection = (
 const readSelectedPaper = (entry: CacheEntry): Effect.Effect<string, BrowseError, CachePaths> => {
   const id = parsePaperIdentifier(entry.id)
   if (id === undefined) {
-    return Effect.fail({ _tag: "BrowseCacheMalformed", message: `invalid cached paper id: ${entry.id}`, id: entry.id })
+    return Effect.fail(new BrowseCacheMalformed({ message: `invalid cached paper id: ${entry.id}`, id: entry.id }))
   }
 
   return CachePaths.use((paths) =>
     Effect.tryPromise({
       try: () => readFile(join(cacheDirForIdentifierAt(paths.cacheRoot, id), "paper.md"), { encoding: "utf8" }),
       catch: (cause): BrowseError => isMissing(cause)
-        ? { _tag: "BrowseCacheMissing", message: `no cached paper for ${entry.id}`, id: entry.id }
-        : { _tag: "BrowseIoError", message: `failed to read cached paper for ${entry.id}`, cause },
+        ? new BrowseCacheMissing({ message: `no cached paper for ${entry.id}`, id: entry.id })
+        : new BrowseIoError({ message: `failed to read cached paper for ${entry.id}`, cause }),
     })
   )
 }
@@ -66,7 +88,7 @@ const writeStdout = (text: string): Effect.Effect<void, BrowseError, Stdio.Stdio
   Stdio.Stdio.use((stdio) =>
     Stream.make(text).pipe(
       Stream.run(stdio.stdout()),
-      Effect.mapError((cause): BrowseError => ({ _tag: "BrowseIoError", message: "failed to write browse prompt", cause }))
+      Effect.mapError((cause): BrowseError => new BrowseIoError({ message: "failed to write browse prompt", cause }))
     )
   )
 
@@ -77,7 +99,7 @@ const readStdinLine: Effect.Effect<string, BrowseError, Stdio.Stdio> =
       Stream.splitLines,
       Stream.runHead,
       Effect.map((line) => Option.isNone(line) ? "" : line.value),
-      Effect.mapError((cause): BrowseError => ({ _tag: "BrowseIoError", message: "failed to read selection", cause }))
+      Effect.mapError((cause): BrowseError => new BrowseIoError({ message: "failed to read selection", cause }))
     )
   )
 
@@ -99,6 +121,6 @@ const parseSelection = (input: string, count: number): Selection | string => {
   return { _tag: "selected", index: selected - 1 }
 }
 
-const invalidSelection = (message: string): BrowseError => ({ _tag: "BrowseInvalidSelection", message })
+const invalidSelection = (message: string): BrowseError => new BrowseInvalidSelection({ message })
 
 const isMissing = (cause: unknown): boolean => cause instanceof Error && "code" in cause && cause.code === "ENOENT"

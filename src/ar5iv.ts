@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Data, Effect, Layer } from "effect"
 import type { Input as DurationInput } from "effect/Duration"
 import { readFile } from "node:fs/promises"
 
@@ -7,11 +7,29 @@ const DEFAULT_TIMEOUT_MS = 5_000
 const DEFAULT_RETRIES = 2
 const DEFAULT_RETRY_DELAY: DurationInput = "150 millis"
 
+export class Ar5ivHttpError extends Data.TaggedError("Ar5ivHttpError")<{
+  readonly status: number
+  readonly message: string
+}> {}
+
+export class Ar5ivTransientError extends Data.TaggedError("Ar5ivTransientError")<{
+  readonly message: string
+  readonly cause: unknown
+}> {}
+
+export class Ar5ivTimeoutError extends Data.TaggedError("Ar5ivTimeoutError")<{
+  readonly message: string
+}> {}
+
+export class Ar5ivDecodeError extends Data.TaggedError("Ar5ivDecodeError")<{
+  readonly message: string
+}> {}
+
 export type Ar5ivError =
-  | { readonly _tag: "Ar5ivHttpError"; readonly status: number; readonly message: string }
-  | { readonly _tag: "Ar5ivTransientError"; readonly message: string; readonly cause: unknown }
-  | { readonly _tag: "Ar5ivTimeoutError"; readonly message: string }
-  | { readonly _tag: "Ar5ivDecodeError"; readonly message: string }
+  | Ar5ivHttpError
+  | Ar5ivTransientError
+  | Ar5ivTimeoutError
+  | Ar5ivDecodeError
 
 export type Ar5ivClientShape = {
   readonly getHtml: (id: string) => Effect.Effect<string, Ar5ivError>
@@ -48,7 +66,7 @@ export const makeAr5ivClient = (options: Ar5ivClientOptions = {}): Ar5ivClientSh
         ? requestHtml({ url: `${baseUrl}/${id}`, fetchImpl, timeoutMs })
         : Effect.tryPromise({
             try: () => readFile(fixturePath, { encoding: "utf8" }),
-            catch: (cause): Ar5ivError => ({ _tag: "Ar5ivTransientError", message: "failed to read ar5iv fixture", cause }),
+            catch: (cause): Ar5ivError => new Ar5ivTransientError({ message: "failed to read ar5iv fixture", cause }),
           })
 
       return retryTransient(html, retries, retryDelay).pipe(Effect.flatMap(decodeHtml))
@@ -69,8 +87,8 @@ const requestHtml = (input: {
   const request: Effect.Effect<Response, Ar5ivError> = Effect.tryPromise({
     try: (signal) => fetchWithTimeout(input.fetchImpl, input.url, signal, input.timeoutMs),
     catch: (cause): Ar5ivError => isAbortError(cause)
-      ? { _tag: "Ar5ivTimeoutError", message: `ar5iv request timed out after ${input.timeoutMs}ms` }
-      : { _tag: "Ar5ivTransientError", message: "ar5iv request failed", cause },
+      ? new Ar5ivTimeoutError({ message: `ar5iv request timed out after ${input.timeoutMs}ms` })
+      : new Ar5ivTransientError({ message: "ar5iv request failed", cause }),
   })
 
   return request.pipe(
@@ -78,28 +96,25 @@ const requestHtml = (input: {
       if (response.ok) {
         return Effect.tryPromise({
           try: () => response.text(),
-          catch: (cause): Ar5ivError => ({ _tag: "Ar5ivTransientError", message: "failed to read ar5iv response", cause }),
+          catch: (cause): Ar5ivError => new Ar5ivTransientError({ message: "failed to read ar5iv response", cause }),
         })
       }
 
       if (response.status === 408 || response.status === 429 || response.status >= 500) {
-        const error: Ar5ivError = {
-          _tag: "Ar5ivTransientError",
+        return Effect.fail(new Ar5ivTransientError({
           message: `ar5iv transient HTTP ${response.status}`,
           cause: response.status,
-        }
-        return Effect.fail(error)
+        }))
       }
 
-      const error: Ar5ivError = { _tag: "Ar5ivHttpError", status: response.status, message: `ar5iv HTTP ${response.status}` }
-      return Effect.fail(error)
+      return Effect.fail(new Ar5ivHttpError({ status: response.status, message: `ar5iv HTTP ${response.status}` }))
     })
   )
 }
 
 const decodeHtml = (html: string): Effect.Effect<string, Ar5ivError> => {
   if (!/<article(?:\s[^>]*)?>[\s\S]*<\/article>/.test(html)) {
-    return Effect.fail({ _tag: "Ar5ivDecodeError", message: "ar5iv response missing article" })
+    return Effect.fail(new Ar5ivDecodeError({ message: "ar5iv response missing article" }))
   }
   return Effect.succeed(html)
 }

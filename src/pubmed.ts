@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Data, Effect, Layer } from "effect"
 import type { Input as DurationInput } from "effect/Duration"
 import { readFile } from "node:fs/promises"
 import type { SearchSort } from "./parser.js"
@@ -35,11 +35,29 @@ export type PubmedSearchParams = {
   readonly sort: SearchSort
 }
 
+export class PubmedHttpError extends Data.TaggedError("PubmedHttpError")<{
+  readonly status: number
+  readonly message: string
+}> {}
+
+export class PubmedTransientError extends Data.TaggedError("PubmedTransientError")<{
+  readonly message: string
+  readonly cause: unknown
+}> {}
+
+export class PubmedTimeoutError extends Data.TaggedError("PubmedTimeoutError")<{
+  readonly message: string
+}> {}
+
+export class PubmedDecodeError extends Data.TaggedError("PubmedDecodeError")<{
+  readonly message: string
+}> {}
+
 export type PubmedError =
-  | { readonly _tag: "PubmedHttpError"; readonly status: number; readonly message: string }
-  | { readonly _tag: "PubmedTransientError"; readonly message: string; readonly cause: unknown }
-  | { readonly _tag: "PubmedTimeoutError"; readonly message: string }
-  | { readonly _tag: "PubmedDecodeError"; readonly message: string }
+  | PubmedHttpError
+  | PubmedTransientError
+  | PubmedTimeoutError
+  | PubmedDecodeError
 
 export type PubmedClientShape = {
   readonly search: (params: PubmedSearchParams) => Effect.Effect<PubmedSearchResult, PubmedError>
@@ -137,7 +155,7 @@ export const PubmedLive = Layer.succeed(
 export const decodeGetResponse = (id: string, xml: string): Effect.Effect<PubmedPaperMetadata, PubmedError> => {
   const article = firstBlock(xml, "PubmedArticle")
   if (article === undefined) {
-    return Effect.fail({ _tag: "PubmedDecodeError", message: `PubMed response missing paper ${id}` })
+    return Effect.fail(new PubmedDecodeError({ message: `PubMed response missing paper ${id}` }))
   }
 
   const title = cleanText(stripTags(firstTag(article, "ArticleTitle")))
@@ -145,7 +163,7 @@ export const decodeGetResponse = (id: string, xml: string): Effect.Effect<Pubmed
   const published = dateFromXml(article)
   const abstract = abstractFromXml(article)
   if (title === undefined || authors.length === 0 || published === undefined || abstract === undefined) {
-    return Effect.fail({ _tag: "PubmedDecodeError", message: `PubMed response has invalid paper ${id}` })
+    return Effect.fail(new PubmedDecodeError({ message: `PubMed response has invalid paper ${id}` }))
   }
 
   const journal = cleanText(stripTags(firstBlock(firstBlock(article, "Journal") ?? "", "Title") ?? firstTag(article, "ISOAbbreviation")))
@@ -162,12 +180,12 @@ export const decodeSearchResponse = (json: string): Effect.Effect<SearchEnvelope
   const countText = result === undefined ? undefined : getString(result.count)
   const idlist = result === undefined ? undefined : getStringArray(result.idlist)
   if (countText === undefined || idlist === undefined) {
-    return Effect.fail({ _tag: "PubmedDecodeError", message: "PubMed search response missing count or idlist" })
+    return Effect.fail(new PubmedDecodeError({ message: "PubMed search response missing count or idlist" }))
   }
 
   const total = Number(countText)
   if (!Number.isSafeInteger(total) || total < 0) {
-    return Effect.fail({ _tag: "PubmedDecodeError", message: "PubMed search response has invalid count" })
+    return Effect.fail(new PubmedDecodeError({ message: "PubMed search response has invalid count" }))
   }
 
   return Effect.succeed({ total, ids: idlist })
@@ -183,7 +201,7 @@ export const decodeSummaryResponse = (
   const root = getRecord(parsed.value)
   const result = root === undefined ? undefined : getRecord(root.result)
   if (result === undefined) {
-    return Effect.fail({ _tag: "PubmedDecodeError", message: "PubMed summary response missing result" })
+    return Effect.fail(new PubmedDecodeError({ message: "PubMed summary response missing result" }))
   }
 
   const papers: Array<PubmedPaper> = []
@@ -212,15 +230,15 @@ const loadJson = (input: {
   if (fixturePath !== undefined) {
     return Effect.tryPromise({
       try: () => readFile(fixturePath, { encoding: "utf8" }),
-      catch: (cause): PubmedError => ({ _tag: "PubmedTransientError", message: input.fixtureMessage, cause }),
+      catch: (cause): PubmedError => new PubmedTransientError({ message: input.fixtureMessage, cause }),
     })
   }
 
   const request: Effect.Effect<Response, PubmedError> = Effect.tryPromise({
     try: (signal) => fetchWithTimeout(input.fetchImpl, input.url, signal, input.timeoutMs),
     catch: (cause): PubmedError => isAbortError(cause)
-      ? { _tag: "PubmedTimeoutError", message: `PubMed request timed out after ${input.timeoutMs}ms` }
-      : { _tag: "PubmedTransientError", message: "PubMed request failed", cause },
+      ? new PubmedTimeoutError({ message: `PubMed request timed out after ${input.timeoutMs}ms` })
+      : new PubmedTransientError({ message: "PubMed request failed", cause }),
   })
 
   return request.pipe(
@@ -228,24 +246,22 @@ const loadJson = (input: {
       if (response.ok) {
         return Effect.tryPromise({
           try: () => response.text(),
-          catch: (cause): PubmedError => ({ _tag: "PubmedTransientError", message: input.responseMessage, cause }),
+          catch: (cause): PubmedError => new PubmedTransientError({ message: input.responseMessage, cause }),
         })
       }
 
       if (response.status === 408 || response.status === 429 || response.status >= 500) {
-        const error: PubmedError = {
-          _tag: "PubmedTransientError",
+        const error: PubmedError = new PubmedTransientError({
           message: `PubMed transient HTTP ${response.status}`,
           cause: response.status,
-        }
+        })
         return Effect.fail(error)
       }
 
-      const error: PubmedError = {
-        _tag: "PubmedHttpError",
+      const error: PubmedError = new PubmedHttpError({
         status: response.status,
         message: `PubMed HTTP ${response.status}`,
-      }
+      })
       return Effect.fail(error)
     })
   )
@@ -331,7 +347,7 @@ const parseJson = (json: string):
     const value: unknown = JSON.parse(json)
     return { _tag: "ok", value }
   } catch {
-    return { _tag: "error", error: { _tag: "PubmedDecodeError", message: "PubMed response is not valid JSON" } }
+    return { _tag: "error", error: new PubmedDecodeError({ message: "PubMed response is not valid JSON" }) }
   }
 }
 

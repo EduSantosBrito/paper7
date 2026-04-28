@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Data, Effect } from "effect"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { Ar5ivClient, type Ar5ivError } from "./ar5iv.js"
@@ -9,14 +9,44 @@ import type { PaperIdentifier, RangeSpec } from "./parser.js"
 import { PubmedClient, type PubmedError, type PubmedPaperMetadata } from "./pubmed.js"
 import { SemanticScholarClient } from "./semanticScholar.js"
 
+export class GetCacheReadError extends Data.TaggedError("GetCacheReadError")<{
+  readonly message: string
+  readonly cause: unknown
+}> {}
+
+export class GetCacheWriteError extends Data.TaggedError("GetCacheWriteError")<{
+  readonly message: string
+  readonly cause: unknown
+}> {}
+
+export class GetRangeError extends Data.TaggedError("GetRangeError")<{
+  readonly message: string
+}> {}
+
+export class GetArxivError extends Data.TaggedError("GetArxivError")<{
+  readonly error: ArxivError
+}> {}
+
+export class GetAr5ivError extends Data.TaggedError("GetAr5ivError")<{
+  readonly error: Ar5ivError
+}> {}
+
+export class GetPubmedError extends Data.TaggedError("GetPubmedError")<{
+  readonly error: PubmedError
+}> {}
+
+export class GetCrossrefError extends Data.TaggedError("GetCrossrefError")<{
+  readonly error: CrossrefError
+}> {}
+
 export type GetError =
-  | { readonly _tag: "GetCacheReadError"; readonly message: string; readonly cause: unknown }
-  | { readonly _tag: "GetCacheWriteError"; readonly message: string; readonly cause: unknown }
-  | { readonly _tag: "GetRangeError"; readonly message: string }
-  | { readonly _tag: "GetArxivError"; readonly error: ArxivError }
-  | { readonly _tag: "GetAr5ivError"; readonly error: Ar5ivError }
-  | { readonly _tag: "GetPubmedError"; readonly error: PubmedError }
-  | { readonly _tag: "GetCrossrefError"; readonly error: CrossrefError }
+  | GetCacheReadError
+  | GetCacheWriteError
+  | GetRangeError
+  | GetArxivError
+  | GetAr5ivError
+  | GetPubmedError
+  | GetCrossrefError
 
 export type GetArxivParams = {
   readonly id: string
@@ -90,11 +120,11 @@ const fetchAndCache = (
   cacheFile: string
 ): Effect.Effect<string, GetError, ArxivClient | Ar5ivClient | SemanticScholarClient> =>
   ArxivClient.use((arxiv) => arxiv.get(id)).pipe(
-    Effect.mapError((error): GetError => ({ _tag: "GetArxivError", error })),
+    Effect.mapError((error): GetError => new GetArxivError({ error })),
     Effect.zipWith(
       Effect.zipWith(
         Ar5ivClient.use((ar5iv) => ar5iv.getHtml(id)).pipe(
-          Effect.mapError((error): GetError => ({ _tag: "GetAr5ivError", error }))
+          Effect.mapError((error): GetError => new GetAr5ivError({ error }))
         ),
         fetchTldr({ tag: "arxiv", id }),
         (html, tldr) => ({ html, tldr })
@@ -110,10 +140,10 @@ const fetchAndCacheWithoutTldr = (
   cacheFile: string
 ): Effect.Effect<string, GetError, ArxivClient | Ar5ivClient> =>
   ArxivClient.use((arxiv) => arxiv.get(id)).pipe(
-    Effect.mapError((error): GetError => ({ _tag: "GetArxivError", error })),
+    Effect.mapError((error): GetError => new GetArxivError({ error })),
     Effect.zipWith(
       Ar5ivClient.use((ar5iv) => ar5iv.getHtml(id)).pipe(
-        Effect.mapError((error): GetError => ({ _tag: "GetAr5ivError", error }))
+        Effect.mapError((error): GetError => new GetAr5ivError({ error }))
       ),
       (metadata, html) => buildCanonicalMarkdown(metadata, html, undefined)
     ),
@@ -128,7 +158,7 @@ const fetchTldr = (id: PaperIdentifier): Effect.Effect<string | undefined, never
 const readCachedPaper = (cacheFile: string): Effect.Effect<string, GetError> =>
   Effect.tryPromise({
     try: () => readFile(cacheFile, { encoding: "utf8" }),
-    catch: (cause): GetError => ({ _tag: "GetCacheReadError", message: "cache miss", cause }),
+    catch: (cause): GetError => new GetCacheReadError({ message: "cache miss", cause }),
   })
 
 const writeCachedPaper = (dir: string, cacheFile: string, markdown: string): Effect.Effect<void, GetError> =>
@@ -137,12 +167,12 @@ const writeCachedPaper = (dir: string, cacheFile: string, markdown: string): Eff
       await mkdir(dir, { recursive: true })
       await writeFile(cacheFile, markdown, { encoding: "utf8" })
     },
-    catch: (cause): GetError => ({ _tag: "GetCacheWriteError", message: "failed to write cache", cause }),
+    catch: (cause): GetError => new GetCacheWriteError({ message: "failed to write cache", cause }),
   })
 
 const writeMeta = (dir: string, id: string, title: string, authors: ReadonlyArray<string>, url: string): Effect.Effect<void, GetError> =>
   writeCacheMeta(dir, id, title, authors, url).pipe(
-    Effect.mapError((error): GetError => ({ _tag: "GetCacheWriteError", message: error.message, cause: error.cause }))
+    Effect.mapError((error): GetError => new GetCacheWriteError({ message: error.message, cause: error.cause }))
   )
 
 const buildCanonicalMarkdown = (metadata: ArxivPaperMetadata, html: string, tldr: string | undefined): string => {
@@ -169,7 +199,7 @@ const fetchAndCachePubmed = (
   includeTldr: boolean
 ): Effect.Effect<string, GetError, PubmedClient | SemanticScholarClient> =>
   PubmedClient.use((pubmed) => pubmed.get(id)).pipe(
-    Effect.mapError((error): GetError => ({ _tag: "GetPubmedError", error })),
+    Effect.mapError((error): GetError => new GetPubmedError({ error })),
     Effect.zipWith(includeTldr ? fetchTldr({ tag: "pubmed", id }) : Effect.succeed(undefined), (metadata, tldr) => ({
       markdown: buildPubmedMarkdown(metadata, tldr),
       metadata,
@@ -204,7 +234,7 @@ const fetchAndCacheDoi = (
   includeTldr: boolean
 ): Effect.Effect<string, GetError, CrossrefClient | SemanticScholarClient> =>
   CrossrefClient.use((crossref) => crossref.get(doi)).pipe(
-    Effect.mapError((error): GetError => ({ _tag: "GetCrossrefError", error })),
+    Effect.mapError((error): GetError => new GetCrossrefError({ error })),
     Effect.zipWith(includeTldr ? fetchTldr({ tag: "doi", id: doi }) : Effect.succeed(undefined), (metadata, tldr) => ({
       markdown: buildDoiMarkdown(metadata, tldr),
       metadata,
@@ -243,7 +273,7 @@ const renderMarkdown = (markdown: string, params: GetArxivParams): Effect.Effect
 const renderRange = (markdown: string, range: RangeSpec): Effect.Effect<string, GetError> => {
   const lines = renderLines(markdown)
   if (range.start > lines.length) {
-    return Effect.fail({ _tag: "GetRangeError", message: `range start ${range.start} exceeds total lines ${lines.length}` })
+    return Effect.fail(new GetRangeError({ message: `range start ${range.start} exceeds total lines ${lines.length}` }))
   }
   const end = Math.min(range.end, lines.length)
   const title = titleFromMarkdown(markdown)

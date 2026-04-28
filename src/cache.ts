@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Data, Effect, Layer } from "effect"
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { PaperIdentifier } from "./parser.js"
@@ -11,11 +11,12 @@ export class CachePaths extends Context.Service<CachePaths, CachePathsShape>()("
 
 export const CachePathsLive = Layer.effect(CachePaths, Effect.sync(() => ({ cacheRoot: defaultCacheRoot() })))
 
-export type CacheError = {
-  readonly _tag: "CacheFsError"
+export class CacheFsError extends Data.TaggedError("CacheFsError")<{
   readonly message: string
   readonly cause: unknown
-}
+}> {}
+
+export type CacheError = CacheFsError
 
 export type CacheEntry = {
   readonly id: string
@@ -82,7 +83,7 @@ const listCachedPapersAt = (cache: string): Effect.Effect<CacheListResult, Cache
 
       return { entries: entries.sort(compareEntries), warnings }
     },
-    catch: (cause): CacheError => ({ _tag: "CacheFsError", message: "failed to list cache", cause }),
+    catch: (cause): CacheError => new CacheFsError({ message: "failed to list cache", cause }),
   })
 
 export const clearCachedPapers = (id: PaperIdentifier | undefined): Effect.Effect<CacheClearResult, CacheError, CachePaths> =>
@@ -103,7 +104,7 @@ export const writeCacheMeta = (
       await mkdir(dir, { recursive: true })
       await writeFile(join(dir, "meta.json"), JSON.stringify({ id, title, authors: authors.join(", "), url }), { encoding: "utf8" })
     },
-    catch: (cause): CacheError => ({ _tag: "CacheFsError", message: "failed to write cache metadata", cause }),
+    catch: (cause): CacheError => new CacheFsError({ message: "failed to write cache metadata", cause }),
   })
 
 export const cacheDirForIdentifier = (id: PaperIdentifier): string => {
@@ -129,7 +130,7 @@ const clearAllCachedPapers = (cache: string): Effect.Effect<CacheClearResult, Ca
       await rm(cache, { recursive: true, force: true })
       return { _tag: "cleared-all" }
     },
-    catch: (cause): CacheError => ({ _tag: "CacheFsError", message: "failed to clear cache", cause }),
+    catch: (cause): CacheError => new CacheFsError({ message: "failed to clear cache", cause }),
   })
 
 const clearOneCachedPaper = (cache: string, id: PaperIdentifier): Effect.Effect<CacheClearResult, CacheError> =>
@@ -142,7 +143,7 @@ const clearOneCachedPaper = (cache: string, id: PaperIdentifier): Effect.Effect<
       await rm(dir, { recursive: true, force: true })
       return { _tag: "cleared-one", id: resultId }
     },
-    catch: (cause): CacheError => ({ _tag: "CacheFsError", message: "failed to clear cache", cause }),
+    catch: (cause): CacheError => new CacheFsError({ message: "failed to clear cache", cause }),
   })
 
 const cacheRoot = (): string => defaultCacheRoot()

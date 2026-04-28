@@ -1,9 +1,12 @@
-import { Effect } from "effect"
+import { Data, Effect } from "effect"
 import type { PaperIdentifier } from "./parser.js"
 import { SemanticScholarClient, type S2Reference, type SemanticScholarError } from "./semanticScholar.js"
 
-export type RefsError =
-  | { readonly _tag: "RefsSemanticScholarError"; readonly error: SemanticScholarError }
+export class RefsSemanticScholarError extends Data.TaggedError("RefsSemanticScholarError")<{
+  readonly error: SemanticScholarError
+}> {}
+
+export type RefsError = RefsSemanticScholarError
 
 export type RefsParams = {
   readonly id: PaperIdentifier
@@ -13,7 +16,7 @@ export type RefsParams = {
 
 export const getReferences = (params: RefsParams): Effect.Effect<string, RefsError, SemanticScholarClient> =>
   SemanticScholarClient.use((client) => client.references({ id: params.id, max: params.max })).pipe(
-    Effect.mapError((error): RefsError => ({ _tag: "RefsSemanticScholarError", error })),
+    Effect.mapError((error): RefsError => new RefsSemanticScholarError({ error })),
     Effect.map((result) => params.json ? JSON.stringify(result, undefined, 2) : renderReferences(result.warnings, result.data))
   )
 

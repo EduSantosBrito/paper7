@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Data, Effect, Layer } from "effect"
 import type { Input as DurationInput } from "effect/Duration"
 import { readFile } from "node:fs/promises"
 import type { SearchSort } from "./parser.js"
@@ -31,11 +31,29 @@ export type ArxivSearchParams = {
   readonly sort: SearchSort
 }
 
+export class ArxivHttpError extends Data.TaggedError("ArxivHttpError")<{
+  readonly status: number
+  readonly message: string
+}> {}
+
+export class ArxivTransientError extends Data.TaggedError("ArxivTransientError")<{
+  readonly message: string
+  readonly cause: unknown
+}> {}
+
+export class ArxivTimeoutError extends Data.TaggedError("ArxivTimeoutError")<{
+  readonly message: string
+}> {}
+
+export class ArxivDecodeError extends Data.TaggedError("ArxivDecodeError")<{
+  readonly message: string
+}> {}
+
 export type ArxivError =
-  | { readonly _tag: "ArxivHttpError"; readonly status: number; readonly message: string }
-  | { readonly _tag: "ArxivTransientError"; readonly message: string; readonly cause: unknown }
-  | { readonly _tag: "ArxivTimeoutError"; readonly message: string }
-  | { readonly _tag: "ArxivDecodeError"; readonly message: string }
+  | ArxivHttpError
+  | ArxivTransientError
+  | ArxivTimeoutError
+  | ArxivDecodeError
 
 export type ArxivClientShape = {
   readonly search: (params: ArxivSearchParams) => Effect.Effect<ArxivSearchResult, ArxivError>
@@ -73,7 +91,7 @@ export const makeArxivClient = (options: ArxivClientOptions = {}): ArxivClientSh
         ? requestFeed({ apiUrl, fetchImpl, params, timeoutMs })
         : Effect.tryPromise({
             try: () => readFile(fixturePath, { encoding: "utf8" }),
-            catch: (cause): ArxivError => ({ _tag: "ArxivTransientError", message: "failed to read arXiv fixture", cause }),
+            catch: (cause): ArxivError => new ArxivTransientError({ message: "failed to read arXiv fixture", cause }),
           })
 
       return retryTransient(loadFeed, retries, retryDelay).pipe(Effect.flatMap((feed) => decodeArxivFeed(feed)))
@@ -84,7 +102,7 @@ export const makeArxivClient = (options: ArxivClientOptions = {}): ArxivClientSh
         ? requestGetFeed({ apiUrl, fetchImpl, id, timeoutMs })
         : Effect.tryPromise({
             try: () => readFile(fixturePath, { encoding: "utf8" }),
-            catch: (cause): ArxivError => ({ _tag: "ArxivTransientError", message: "failed to read arXiv fixture", cause }),
+            catch: (cause): ArxivError => new ArxivTransientError({ message: "failed to read arXiv fixture", cause }),
           })
 
       return retryTransient(loadFeed, retries, retryDelay).pipe(Effect.flatMap((feed) => decodeArxivGetFeed(feed, id)))
@@ -100,12 +118,12 @@ export const ArxivLive = Layer.succeed(
 export const decodeArxivFeed = (xml: string): Effect.Effect<ArxivSearchResult, ArxivError> => {
   const totalText = firstTag(xml, "opensearch:totalResults")
   if (totalText === undefined) {
-    return Effect.fail({ _tag: "ArxivDecodeError", message: "arXiv response missing totalResults" })
+    return Effect.fail(new ArxivDecodeError({ message: "arXiv response missing totalResults" }))
   }
 
   const total = Number(totalText.trim())
   if (!Number.isSafeInteger(total) || total < 0) {
-    return Effect.fail({ _tag: "ArxivDecodeError", message: "arXiv response has invalid totalResults" })
+    return Effect.fail(new ArxivDecodeError({ message: "arXiv response has invalid totalResults" }))
   }
 
   const entries = tagBlocks(xml, "entry")
@@ -126,13 +144,13 @@ export const decodeArxivFeed = (xml: string): Effect.Effect<ArxivSearchResult, A
 export const decodeArxivGetFeed = (xml: string, id: string): Effect.Effect<ArxivPaperMetadata, ArxivError> => {
   const entry = tagBlocks(xml, "entry")[0]
   if (entry === undefined) {
-    return Effect.fail({ _tag: "ArxivDecodeError", message: `arXiv response missing paper ${id}` })
+    return Effect.fail(new ArxivDecodeError({ message: `arXiv response missing paper ${id}` }))
   }
 
   const decoded = decodeEntry(entry)
   const abstract = cleanText(firstTag(entry, "summary"))
   if (decoded._tag !== "paper" || decoded.paper.id !== id || abstract === undefined) {
-    return Effect.fail({ _tag: "ArxivDecodeError", message: `arXiv response has invalid paper ${id}` })
+    return Effect.fail(new ArxivDecodeError({ message: `arXiv response has invalid paper ${id}` }))
   }
 
   return Effect.succeed({ ...decoded.paper, abstract })
@@ -148,8 +166,8 @@ const requestFeed = (input: {
   const request: Effect.Effect<Response, ArxivError> = Effect.tryPromise({
     try: (signal) => fetchWithTimeout(input.fetchImpl, url, signal, input.timeoutMs),
     catch: (cause): ArxivError => isAbortError(cause)
-      ? { _tag: "ArxivTimeoutError", message: `arXiv request timed out after ${input.timeoutMs}ms` }
-      : { _tag: "ArxivTransientError", message: "arXiv request failed", cause },
+      ? new ArxivTimeoutError({ message: `arXiv request timed out after ${input.timeoutMs}ms` })
+      : new ArxivTransientError({ message: "arXiv request failed", cause }),
   })
 
   return request.pipe(
@@ -157,24 +175,22 @@ const requestFeed = (input: {
       if (response.ok) {
         return Effect.tryPromise({
           try: () => response.text(),
-          catch: (cause): ArxivError => ({ _tag: "ArxivTransientError", message: "failed to read arXiv response", cause }),
+          catch: (cause): ArxivError => new ArxivTransientError({ message: "failed to read arXiv response", cause }),
         })
       }
 
       if (response.status === 408 || response.status === 429 || response.status >= 500) {
-        const error: ArxivError = {
-          _tag: "ArxivTransientError",
+        const error: ArxivError = new ArxivTransientError({
           message: `arXiv transient HTTP ${response.status}`,
           cause: response.status,
-        }
+        })
         return Effect.fail(error)
       }
 
-      const error: ArxivError = {
-        _tag: "ArxivHttpError",
+      const error: ArxivError = new ArxivHttpError({
         status: response.status,
         message: `arXiv HTTP ${response.status}`,
-      }
+      })
       return Effect.fail(error)
     })
   )
@@ -190,8 +206,8 @@ const requestGetFeed = (input: {
   const request: Effect.Effect<Response, ArxivError> = Effect.tryPromise({
     try: (signal) => fetchWithTimeout(input.fetchImpl, url, signal, input.timeoutMs),
     catch: (cause): ArxivError => isAbortError(cause)
-      ? { _tag: "ArxivTimeoutError", message: `arXiv request timed out after ${input.timeoutMs}ms` }
-      : { _tag: "ArxivTransientError", message: "arXiv request failed", cause },
+      ? new ArxivTimeoutError({ message: `arXiv request timed out after ${input.timeoutMs}ms` })
+      : new ArxivTransientError({ message: "arXiv request failed", cause }),
   })
 
   return request.pipe(
@@ -199,20 +215,19 @@ const requestGetFeed = (input: {
       if (response.ok) {
         return Effect.tryPromise({
           try: () => response.text(),
-          catch: (cause): ArxivError => ({ _tag: "ArxivTransientError", message: "failed to read arXiv response", cause }),
+          catch: (cause): ArxivError => new ArxivTransientError({ message: "failed to read arXiv response", cause }),
         })
       }
 
       if (response.status === 408 || response.status === 429 || response.status >= 500) {
-        const error: ArxivError = {
-          _tag: "ArxivTransientError",
+        const error: ArxivError = new ArxivTransientError({
           message: `arXiv transient HTTP ${response.status}`,
           cause: response.status,
-        }
+        })
         return Effect.fail(error)
       }
 
-      const error: ArxivError = { _tag: "ArxivHttpError", status: response.status, message: `arXiv HTTP ${response.status}` }
+      const error: ArxivError = new ArxivHttpError({ status: response.status, message: `arXiv HTTP ${response.status}` })
       return Effect.fail(error)
     })
   )

@@ -7,12 +7,25 @@ import { CliOutput, Command } from "effect/unstable/cli"
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { Ar5ivClient, type Ar5ivClientShape } from "../src/ar5iv.js"
-import { ArxivClient, makeArxivClient, type ArxivClientShape } from "../src/arxiv.js"
+import { Ar5ivClient, Ar5ivDecodeError, type Ar5ivClientShape } from "../src/ar5iv.js"
+import { ArxivClient, ArxivDecodeError, makeArxivClient, type ArxivClientShape } from "../src/arxiv.js"
 import { rootCommand, VERSION } from "../src/cli.js"
-import { CrossrefClient, type CrossrefClientShape } from "../src/crossref.js"
-import { PubmedClient, type PubmedClientShape } from "../src/pubmed.js"
-import { SemanticScholarClient, type SemanticScholarClientShape } from "../src/semanticScholar.js"
+import { CliValidationError } from "../src/cliValidation.js"
+import { CrossrefClient, CrossrefDecodeError, type CrossrefClientShape } from "../src/crossref.js"
+import { PubmedClient, PubmedDecodeError, type PubmedClientShape } from "../src/pubmed.js"
+import { SemanticScholarClient, SemanticScholarDecodeError, type SemanticScholarClientShape } from "../src/semanticScholar.js"
+import {
+  GetAr5ivError,
+  GetArxivError,
+  GetCacheReadError,
+  GetCacheWriteError,
+  GetCrossrefError,
+  GetPubmedError,
+  GetRangeError,
+  getArxivPaper,
+  getDoiPaper,
+  getPubmedPaper,
+} from "../src/get.js"
 
 const deterministicCliOutput = CliOutput.layer(CliOutput.defaultFormatter({ colors: false }))
 
@@ -54,25 +67,25 @@ const doiMetadata = {
 }
 
 const unusedArxiv: ArxivClientShape = {
-  search: () => Effect.fail({ _tag: "ArxivDecodeError", message: "unexpected search" }),
-  get: () => Effect.fail({ _tag: "ArxivDecodeError", message: "unexpected arXiv get" })
+  search: () => Effect.fail(new ArxivDecodeError({ message: "unexpected search" })),
+  get: () => Effect.fail(new ArxivDecodeError({ message: "unexpected arXiv get" }))
 }
 
 const unusedAr5iv: Ar5ivClientShape = {
-  getHtml: () => Effect.fail({ _tag: "Ar5ivDecodeError", message: "unexpected ar5iv get" })
+  getHtml: () => Effect.fail(new Ar5ivDecodeError({ message: "unexpected ar5iv get" }))
 }
 
 const unusedPubmed: PubmedClientShape = {
-  search: () => Effect.fail({ _tag: "PubmedDecodeError", message: "unexpected search" }),
-  get: () => Effect.fail({ _tag: "PubmedDecodeError", message: "unexpected PubMed get" })
+  search: () => Effect.fail(new PubmedDecodeError({ message: "unexpected search" })),
+  get: () => Effect.fail(new PubmedDecodeError({ message: "unexpected PubMed get" }))
 }
 
 const unusedCrossref: CrossrefClientShape = {
-  get: () => Effect.fail({ _tag: "CrossrefDecodeError", message: "unexpected DOI get" })
+  get: () => Effect.fail(new CrossrefDecodeError({ message: "unexpected DOI get" }))
 }
 
 const emptySemanticScholar: SemanticScholarClientShape = {
-  references: () => Effect.fail({ _tag: "SemanticScholarDecodeError", message: "unexpected references" }),
+  references: () => Effect.fail(new SemanticScholarDecodeError({ message: "unexpected references" })),
   tldr: () => Effect.succeed(undefined)
 }
 
@@ -297,6 +310,26 @@ describe("get command", () => {
       expect(badId.exit._tag).toBe("Failure")
     }))
 
+  it.effect("surfaces typed CliValidationError for invalid identifiers and ranges", () =>
+    Effect.gen(function*() {
+      const recoveredPubmed = yield* Command.runWith(rootCommand, { version: VERSION })(["get", "pmid:not-a-number"]).pipe(
+        Effect.catchTag("CliValidationError", (error) => Effect.succeed(error.message))
+      )
+      const recoveredDoi = yield* Command.runWith(rootCommand, { version: VERSION })(["get", "doi:bad"]).pipe(
+        Effect.catchTag("CliValidationError", (error) => Effect.succeed(error.message))
+      )
+      const recoveredRange = yield* Command.runWith(rootCommand, { version: VERSION })(["get", "2401.04088", "--range", "1:2"]).pipe(
+        Effect.catchTag("CliValidationError", (error) => Effect.succeed(error.message))
+      )
+
+      expect(recoveredPubmed).toBe("invalid PubMed ID: pmid:not-a-number")
+      expect(recoveredDoi).toBe("invalid DOI: doi:bad")
+      expect(recoveredRange).toBe("--range requires --detailed")
+    }).pipe(
+      Effect.provide(deterministicCliOutput),
+      Effect.provide(NodeServices.layer)
+    ))
+
   it.effect("applies detailed range, no-refs, no-cache, and no-tldr modes", () =>
     withTempHome(Effect.gen(function*() {
       const home = process.env.HOME ?? ""
@@ -328,7 +361,7 @@ describe("get command", () => {
           references: emptySemanticScholar.references,
           tldr: (id) => id.tag === "arxiv" && id.id === "2401.04088"
             ? Effect.succeed("Fixture TLDR from Semantic Scholar.")
-            : Effect.fail({ _tag: "SemanticScholarDecodeError", message: "unexpected TLDR id" })
+            : Effect.fail(new SemanticScholarDecodeError({ message: "unexpected TLDR id" }))
         }
       }))
       const cached = yield* readCache(home, ["2401.04088"])
@@ -342,11 +375,11 @@ describe("get command", () => {
   it.effect("surfaces typed upstream failures", () =>
     withTempHome(Effect.gen(function*() {
       const result = yield* runRootWith(["get", "doi:10.5555/example.paper", "--no-tldr"], fixtureClients({
-        crossref: { get: () => Effect.fail({ _tag: "CrossrefDecodeError", message: "Crossref bad shape" }) }
+        crossref: { get: () => Effect.fail(new CrossrefDecodeError({ message: "Crossref bad shape" })) }
       }))
       const ar5ivResult = yield* runRootWith(["get", "2401.04088", "--no-tldr"], fixtureClients({
         arxiv: { search: unusedArxiv.search, get: () => Effect.succeed(arxivMetadata) },
-        ar5iv: { getHtml: () => Effect.fail({ _tag: "Ar5ivDecodeError", message: "ar5iv response missing article" }) }
+        ar5iv: { getHtml: () => Effect.fail(new Ar5ivDecodeError({ message: "ar5iv response missing article" })) }
       }))
 
       expect(result.exit._tag).toBe("Failure")
@@ -354,6 +387,155 @@ describe("get command", () => {
       expect(ar5ivResult.exit._tag).toBe("Failure")
       expect(ar5ivResult.stderr).toBe("error: ar5iv decode failure: ar5iv response missing article")
     })))
+})
+
+describe("get yieldable failures", () => {
+  it.effect("getArxivPaper yields GetArxivError with nested ArxivDecodeError", () =>
+    Effect.gen(function*() {
+      const arxivClient: ArxivClientShape = {
+        search: () => Effect.fail(new ArxivDecodeError({ message: "unexpected search" })),
+        get: () => Effect.fail(new ArxivDecodeError({ message: "arXiv decode failure" })),
+      }
+      const ar5ivClient: Ar5ivClientShape = {
+        getHtml: () => Effect.succeed(ar5ivHtml),
+      }
+      const semanticScholar: SemanticScholarClientShape = {
+        references: () => Effect.fail(new SemanticScholarDecodeError({ message: "unexpected references" })),
+        tldr: () => Effect.succeed(undefined),
+      }
+
+      const result = yield* getArxivPaper({ id: "2401.04088", cache: false, refs: true, tldr: false, detailed: true }).pipe(
+        Effect.provideService(ArxivClient, arxivClient),
+        Effect.provideService(Ar5ivClient, ar5ivClient),
+        Effect.provideService(SemanticScholarClient, semanticScholar),
+        Effect.catchTag("GetArxivError", (error) => Effect.succeed(error))
+      )
+
+      expect(result).toBeInstanceOf(GetArxivError)
+      expect(result.error).toBeInstanceOf(ArxivDecodeError)
+      expect(result.error.message).toBe("arXiv decode failure")
+    }))
+
+  it.effect("getArxivPaper yields GetAr5ivError with nested Ar5ivDecodeError", () =>
+    Effect.gen(function*() {
+      const arxivClient: ArxivClientShape = {
+        search: () => Effect.fail(new ArxivDecodeError({ message: "unexpected search" })),
+        get: () => Effect.succeed(arxivMetadata),
+      }
+      const ar5ivClient: Ar5ivClientShape = {
+        getHtml: () => Effect.fail(new Ar5ivDecodeError({ message: "ar5iv decode failure" })),
+      }
+      const semanticScholar: SemanticScholarClientShape = {
+        references: () => Effect.fail(new SemanticScholarDecodeError({ message: "unexpected references" })),
+        tldr: () => Effect.succeed(undefined),
+      }
+
+      const result = yield* getArxivPaper({ id: "2401.04088", cache: false, refs: true, tldr: false, detailed: true }).pipe(
+        Effect.provideService(ArxivClient, arxivClient),
+        Effect.provideService(Ar5ivClient, ar5ivClient),
+        Effect.provideService(SemanticScholarClient, semanticScholar),
+        Effect.catchTag("GetAr5ivError", (error) => Effect.succeed(error))
+      )
+
+      expect(result).toBeInstanceOf(GetAr5ivError)
+      expect(result.error).toBeInstanceOf(Ar5ivDecodeError)
+      expect(result.error.message).toBe("ar5iv decode failure")
+    }))
+
+  it.effect("getPubmedPaper yields GetPubmedError with nested PubmedDecodeError", () =>
+    Effect.gen(function*() {
+      const pubmedClient: PubmedClientShape = {
+        search: () => Effect.fail(new PubmedDecodeError({ message: "unexpected search" })),
+        get: () => Effect.fail(new PubmedDecodeError({ message: "PubMed decode failure" })),
+      }
+      const semanticScholar: SemanticScholarClientShape = {
+        references: () => Effect.fail(new SemanticScholarDecodeError({ message: "unexpected references" })),
+        tldr: () => Effect.succeed(undefined),
+      }
+
+      const result = yield* getPubmedPaper({ id: "38903003", cache: false, refs: true, tldr: false, detailed: true }).pipe(
+        Effect.provideService(PubmedClient, pubmedClient),
+        Effect.provideService(SemanticScholarClient, semanticScholar),
+        Effect.catchTag("GetPubmedError", (error) => Effect.succeed(error))
+      )
+
+      expect(result).toBeInstanceOf(GetPubmedError)
+      expect(result.error).toBeInstanceOf(PubmedDecodeError)
+      expect(result.error.message).toBe("PubMed decode failure")
+    }))
+
+  it.effect("getDoiPaper yields GetCrossrefError with nested CrossrefDecodeError", () =>
+    Effect.gen(function*() {
+      const crossrefClient: CrossrefClientShape = {
+        get: () => Effect.fail(new CrossrefDecodeError({ message: "Crossref decode failure" })),
+      }
+      const arxivClient: ArxivClientShape = {
+        search: () => Effect.fail(new ArxivDecodeError({ message: "unexpected search" })),
+        get: () => Effect.fail(new ArxivDecodeError({ message: "unexpected arXiv get" })),
+      }
+      const ar5ivClient: Ar5ivClientShape = {
+        getHtml: () => Effect.fail(new Ar5ivDecodeError({ message: "unexpected ar5iv get" })),
+      }
+      const semanticScholar: SemanticScholarClientShape = {
+        references: () => Effect.fail(new SemanticScholarDecodeError({ message: "unexpected references" })),
+        tldr: () => Effect.succeed(undefined),
+      }
+
+      const result = yield* getDoiPaper({ id: "10.5555/example.paper", cache: false, refs: true, tldr: false, detailed: true }).pipe(
+        Effect.provideService(CrossrefClient, crossrefClient),
+        Effect.provideService(ArxivClient, arxivClient),
+        Effect.provideService(Ar5ivClient, ar5ivClient),
+        Effect.provideService(SemanticScholarClient, semanticScholar),
+        Effect.catchTag("GetCrossrefError", (error) => Effect.succeed(error))
+      )
+
+      expect(result).toBeInstanceOf(GetCrossrefError)
+      expect(result.error).toBeInstanceOf(CrossrefDecodeError)
+      expect(result.error.message).toBe("Crossref decode failure")
+    }))
+
+  it.effect("GetRangeError is yieldable and recoverable", () =>
+    Effect.gen(function*() {
+      const arxivClient: ArxivClientShape = {
+        search: () => Effect.fail(new ArxivDecodeError({ message: "unexpected search" })),
+        get: () => Effect.succeed(arxivMetadata),
+      }
+      const ar5ivClient: Ar5ivClientShape = {
+        getHtml: () => Effect.succeed(ar5ivHtml),
+      }
+
+      const result = yield* getArxivPaper({ id: "2401.04088", cache: false, refs: true, tldr: false, detailed: true, range: { start: 1000, end: 2000 } }).pipe(
+        Effect.provideService(ArxivClient, arxivClient),
+        Effect.provideService(Ar5ivClient, ar5ivClient),
+        Effect.catchTag("GetRangeError", (error) => Effect.succeed(error))
+      )
+
+      expect(result).toBeInstanceOf(GetRangeError)
+      expect(result.message).toContain("range start 1000 exceeds total lines")
+    }))
+
+  it.effect("TLDR enrichment failure remains non-fatal and omits TLDR", () =>
+    Effect.gen(function*() {
+      const arxivClient: ArxivClientShape = {
+        search: () => Effect.fail(new ArxivDecodeError({ message: "unexpected search" })),
+        get: () => Effect.succeed(arxivMetadata),
+      }
+      const ar5ivClient: Ar5ivClientShape = {
+        getHtml: () => Effect.succeed(ar5ivHtml),
+      }
+      const semanticScholar: SemanticScholarClientShape = {
+        references: () => Effect.fail(new SemanticScholarDecodeError({ message: "unexpected references" })),
+        tldr: () => Effect.fail(new SemanticScholarDecodeError({ message: "TLDR failure" })),
+      }
+
+      const result = yield* getArxivPaper({ id: "2401.04088", cache: false, refs: true, tldr: true, detailed: true }).pipe(
+        Effect.provideService(ArxivClient, arxivClient),
+        Effect.provideService(Ar5ivClient, ar5ivClient),
+        Effect.provideService(SemanticScholarClient, semanticScholar)
+      )
+
+      expect(result).not.toContain("**TLDR:**")
+    }))
 })
 
 describe("get source clients", () => {

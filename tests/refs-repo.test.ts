@@ -4,8 +4,9 @@ import { Console, Effect } from "effect"
 import * as TestConsole from "effect/testing/TestConsole"
 import { CliOutput, Command } from "effect/unstable/cli"
 import { rootCommand, VERSION } from "../src/cli.js"
-import { makeRepositoryDiscoveryClient, RepositoryDiscoveryClient, type RepositoryDiscoveryClientShape } from "../src/repo.js"
-import { makeSemanticScholarClient, SemanticScholarClient, type SemanticScholarClientShape } from "../src/semanticScholar.js"
+import { getReferences, RefsSemanticScholarError } from "../src/refs.js"
+import { makeRepositoryDiscoveryClient, PapersWithCodeDecodeError, PapersWithCodeHttpError, PapersWithCodeRateLimitError, PapersWithCodeTimeoutError, PapersWithCodeTransientError, RepositoryDiscoveryClient, type RepositoryDiscoveryClientShape } from "../src/repo.js"
+import { makeSemanticScholarClient, SemanticScholarClient, SemanticScholarDecodeError, SemanticScholarNotFoundError, SemanticScholarRateLimitError, SemanticScholarTimeoutError, type SemanticScholarClientShape } from "../src/semanticScholar.js"
 
 const deterministicCliOutput = CliOutput.layer(CliOutput.defaultFormatter({ colors: false }))
 
@@ -50,12 +51,12 @@ const partialReposJson = JSON.stringify({
 const badShapeJson = JSON.stringify({ items: [] })
 
 const unusedSemanticScholar: SemanticScholarClientShape = {
-  references: () => Effect.fail({ _tag: "SemanticScholarDecodeError", message: "unexpected references" }),
+  references: () => Effect.fail(new SemanticScholarDecodeError({ message: "unexpected references" })),
   tldr: () => Effect.succeed(undefined)
 }
 
 const unusedRepositoryDiscovery: RepositoryDiscoveryClientShape = {
-  discover: () => Effect.fail({ _tag: "PapersWithCodeDecodeError", message: "unexpected repo discovery" })
+  discover: () => Effect.fail(new PapersWithCodeDecodeError({ message: "unexpected repo discovery" }))
 }
 
 const runRootWith = (
@@ -158,13 +159,13 @@ describe("refs command", () => {
     Effect.gen(function*() {
       let retryCalls = 0
       const missing = yield* runRootWith(["refs", "9999.99999"], {
-        semanticScholar: { references: () => Effect.fail({ _tag: "SemanticScholarNotFoundError", message: "no paper found on Semantic Scholar" }), tldr: unusedSemanticScholar.tldr }
+        semanticScholar: { references: () => Effect.fail(new SemanticScholarNotFoundError({ message: "no paper found on Semantic Scholar" })), tldr: unusedSemanticScholar.tldr }
       })
       const rate = yield* runRootWith(["refs", "1706.03762"], {
-        semanticScholar: { references: () => Effect.fail({ _tag: "SemanticScholarRateLimitError", message: "Semantic Scholar rate limit exceeded", retryAfter: "30" }), tldr: unusedSemanticScholar.tldr }
+        semanticScholar: { references: () => Effect.fail(new SemanticScholarRateLimitError({ message: "Semantic Scholar rate limit exceeded", retryAfter: "30" })), tldr: unusedSemanticScholar.tldr }
       })
       const timeout = yield* runRootWith(["refs", "1706.03762"], {
-        semanticScholar: { references: () => Effect.fail({ _tag: "SemanticScholarTimeoutError", message: "Semantic Scholar request timed out after 5ms" }), tldr: unusedSemanticScholar.tldr }
+        semanticScholar: { references: () => Effect.fail(new SemanticScholarTimeoutError({ message: "Semantic Scholar request timed out after 5ms" })), tldr: unusedSemanticScholar.tldr }
       })
       const retryClient = makeSemanticScholarClient({
         fetchImpl: async () => {
@@ -233,7 +234,7 @@ describe("repo command", () => {
       let retryCalls = 0
       let transientCalls = 0
       const timeout = yield* runRootWith(["repo", "1706.03762"], {
-        repositoryDiscovery: { discover: () => Effect.fail({ _tag: "PapersWithCodeTimeoutError", message: "Papers With Code request timed out after 5ms" }) }
+        repositoryDiscovery: { discover: () => Effect.fail(new PapersWithCodeTimeoutError({ message: "Papers With Code request timed out after 5ms" })) }
       })
       const rate = yield* runRootWith(["repo", "1706.03762"], {
         repositoryDiscovery: makeRepositoryDiscoveryClient({ fetchImpl: async () => new Response("limited", { status: 429, headers: { "retry-after": "60" } }), retries: 1, retryDelay: 0 })
@@ -266,5 +267,49 @@ describe("repo command", () => {
       expect(retried).toEqual({ candidates: [], warnings: [] })
       expect(transient._tag).toBe("Failure")
       expect(transientCalls).toBe(2)
+    }))
+})
+
+describe("yieldable discovery errors", () => {
+  it.effect("repository errors are class instances", () =>
+    Effect.gen(function*() {
+      const decode = new PapersWithCodeDecodeError({ message: "decode" })
+      const timeout = new PapersWithCodeTimeoutError({ message: "timeout" })
+      const rate = new PapersWithCodeRateLimitError({ message: "rate", retryAfter: "30" })
+      const http = new PapersWithCodeHttpError({ status: 500, message: "http" })
+      const transient = new PapersWithCodeTransientError({ message: "transient", cause: "x" })
+
+      expect(decode._tag).toBe("PapersWithCodeDecodeError")
+      expect(timeout._tag).toBe("PapersWithCodeTimeoutError")
+      expect(rate._tag).toBe("PapersWithCodeRateLimitError")
+      expect(http._tag).toBe("PapersWithCodeHttpError")
+      expect(transient._tag).toBe("PapersWithCodeTransientError")
+      expect(rate.retryAfter).toBe("30")
+    }))
+
+  it.effect("repository errors can be yielded in generators", () =>
+    Effect.gen(function*() {
+      const result = yield* Effect.gen(function*() {
+        return yield* new PapersWithCodeTimeoutError({ message: " Papers With Code request timed out after 5ms" })
+      }).pipe(Effect.flip)
+
+      expect(result._tag).toBe("PapersWithCodeTimeoutError")
+      expect(result.message).toBe(" Papers With Code request timed out after 5ms")
+    }))
+
+  it.effect("refs wrapper yields RefsSemanticScholarError with nested SemanticScholarError", () =>
+    Effect.gen(function*() {
+      const fakeClient: SemanticScholarClientShape = {
+        references: () => Effect.fail(new SemanticScholarRateLimitError({ message: "rate limited", retryAfter: "10" })),
+        tldr: () => Effect.succeed(undefined)
+      }
+      const result = yield* getReferences({ id: { tag: "arxiv", id: "1706.03762" }, max: 1, json: false }).pipe(
+        Effect.provideService(SemanticScholarClient, fakeClient),
+        Effect.flip
+      )
+
+      expect(result._tag).toBe("RefsSemanticScholarError")
+      expect(result.error._tag).toBe("SemanticScholarRateLimitError")
+      expect(result.error.retryAfter).toBe("10")
     }))
 })

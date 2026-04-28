@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Data, Effect, Layer } from "effect"
 import type { Input as DurationInput } from "effect/Duration"
 import { readFile } from "node:fs/promises"
 import type { PaperIdentifier } from "./parser.js"
@@ -20,12 +20,35 @@ export type RepositoryDiscoveryResult = {
   readonly warnings: ReadonlyArray<string>
 }
 
+export class PapersWithCodeHttpError extends Data.TaggedError("PapersWithCodeHttpError")<{
+  readonly status: number
+  readonly message: string
+}> {}
+
+export class PapersWithCodeRateLimitError extends Data.TaggedError("PapersWithCodeRateLimitError")<{
+  readonly message: string
+  readonly retryAfter?: string
+}> {}
+
+export class PapersWithCodeTransientError extends Data.TaggedError("PapersWithCodeTransientError")<{
+  readonly message: string
+  readonly cause: unknown
+}> {}
+
+export class PapersWithCodeTimeoutError extends Data.TaggedError("PapersWithCodeTimeoutError")<{
+  readonly message: string
+}> {}
+
+export class PapersWithCodeDecodeError extends Data.TaggedError("PapersWithCodeDecodeError")<{
+  readonly message: string
+}> {}
+
 export type RepositoryDiscoveryError =
-  | { readonly _tag: "PapersWithCodeHttpError"; readonly status: number; readonly message: string }
-  | { readonly _tag: "PapersWithCodeRateLimitError"; readonly message: string; readonly retryAfter?: string }
-  | { readonly _tag: "PapersWithCodeTransientError"; readonly message: string; readonly cause: unknown }
-  | { readonly _tag: "PapersWithCodeTimeoutError"; readonly message: string }
-  | { readonly _tag: "PapersWithCodeDecodeError"; readonly message: string }
+  | PapersWithCodeHttpError
+  | PapersWithCodeRateLimitError
+  | PapersWithCodeTransientError
+  | PapersWithCodeTimeoutError
+  | PapersWithCodeDecodeError
 
 export type RepositoryDiscoveryClientShape = {
   readonly discover: (id: PaperIdentifier) => Effect.Effect<RepositoryDiscoveryResult, RepositoryDiscoveryError>
@@ -105,7 +128,7 @@ export const decodePaperSearch = (json: string): Effect.Effect<PaperSearchResult
   const root = getRecord(parsed.value)
   const results = root === undefined ? undefined : getArray(root.results)
   if (results === undefined) {
-    return Effect.fail({ _tag: "PapersWithCodeDecodeError", message: "Papers With Code paper response missing results" })
+    return Effect.fail(new PapersWithCodeDecodeError({ message: "Papers With Code paper response missing results" }))
   }
 
   for (const item of results) {
@@ -124,7 +147,7 @@ export const decodeRepositories = (json: string): Effect.Effect<RepositoryDiscov
   const root = getRecord(parsed.value)
   const results = root === undefined ? undefined : getArray(root.results)
   if (results === undefined) {
-    return Effect.fail({ _tag: "PapersWithCodeDecodeError", message: "Papers With Code repository response missing results" })
+    return Effect.fail(new PapersWithCodeDecodeError({ message: "Papers With Code repository response missing results" }))
   }
 
   const candidates: Array<RepositoryCandidate> = []
@@ -150,15 +173,15 @@ const loadJson = (input: {
   if (fixturePath !== undefined) {
     return Effect.tryPromise({
       try: () => readFile(fixturePath, { encoding: "utf8" }),
-      catch: (cause): RepositoryDiscoveryError => ({ _tag: "PapersWithCodeTransientError", message: input.fixtureMessage, cause }),
+      catch: (cause): RepositoryDiscoveryError => new PapersWithCodeTransientError({ message: input.fixtureMessage, cause }),
     })
   }
 
   const request: Effect.Effect<Response, RepositoryDiscoveryError> = Effect.tryPromise({
     try: (signal) => fetchWithTimeout(input.fetchImpl, input.url, signal, input.timeoutMs),
     catch: (cause): RepositoryDiscoveryError => isAbortError(cause)
-      ? { _tag: "PapersWithCodeTimeoutError", message: `Papers With Code request timed out after ${input.timeoutMs}ms` }
-      : { _tag: "PapersWithCodeTransientError", message: "Papers With Code request failed", cause },
+      ? new PapersWithCodeTimeoutError({ message: `Papers With Code request timed out after ${input.timeoutMs}ms` })
+      : new PapersWithCodeTransientError({ message: "Papers With Code request failed", cause }),
   })
 
   return request.pipe(
@@ -166,33 +189,34 @@ const loadJson = (input: {
       if (response.ok) {
         return Effect.tryPromise({
           try: () => response.text(),
-          catch: (cause): RepositoryDiscoveryError => ({ _tag: "PapersWithCodeTransientError", message: input.responseMessage, cause }),
+          catch: (cause): RepositoryDiscoveryError => new PapersWithCodeTransientError({ message: input.responseMessage, cause }),
         })
       }
 
       if (response.status === 429) {
         const retryAfter = response.headers.get("retry-after") ?? undefined
-        const error: RepositoryDiscoveryError = retryAfter === undefined
-          ? { _tag: "PapersWithCodeRateLimitError", message: "Papers With Code rate limit exceeded" }
-          : { _tag: "PapersWithCodeRateLimitError", message: "Papers With Code rate limit exceeded", retryAfter }
-        return Effect.fail(error)
+        return Effect.fail(
+          retryAfter === undefined
+            ? new PapersWithCodeRateLimitError({ message: "Papers With Code rate limit exceeded" })
+            : new PapersWithCodeRateLimitError({ message: "Papers With Code rate limit exceeded", retryAfter })
+        )
       }
 
       if (response.status === 408 || response.status >= 500) {
-        const error: RepositoryDiscoveryError = {
-          _tag: "PapersWithCodeTransientError",
-          message: `Papers With Code transient HTTP ${response.status}`,
-          cause: response.status,
-        }
-        return Effect.fail(error)
+        return Effect.fail(
+          new PapersWithCodeTransientError({
+            message: `Papers With Code transient HTTP ${response.status}`,
+            cause: response.status,
+          })
+        )
       }
 
-      const error: RepositoryDiscoveryError = {
-        _tag: "PapersWithCodeHttpError",
-        status: response.status,
-        message: `Papers With Code HTTP ${response.status}`,
-      }
-      return Effect.fail(error)
+      return Effect.fail(
+        new PapersWithCodeHttpError({
+          status: response.status,
+          message: `Papers With Code HTTP ${response.status}`,
+        })
+      )
     })
   )
 }
@@ -269,7 +293,7 @@ const parseJson = (json: string):
   try {
     return { _tag: "ok", value: JSON.parse(json) }
   } catch {
-    return { _tag: "error", error: { _tag: "PapersWithCodeDecodeError", message: "Papers With Code response is not valid JSON" } }
+    return { _tag: "error", error: new PapersWithCodeDecodeError({ message: "Papers With Code response is not valid JSON" }) }
   }
 }
 
