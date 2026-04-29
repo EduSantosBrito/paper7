@@ -6,12 +6,12 @@ Real output files from 5 landmark papers, comparing paper7's clean Markdown agai
 
 | Paper | Pages | PDF | HTML (ar5iv) | paper7 | vs PDF | vs HTML |
 |-------|------:|----:|-----------:|-------:|-------:|--------:|
-| Attention Is All You Need | 15 | 2,163KB | 343KB | 39KB | **-98%** | **-88%** |
+| Attention Is All You Need | 15 | 2,163KB | 343KB | 40KB | **-98%** | **-88%** |
 | RAG | 12 | 864KB | 301KB | 68KB | **-92%** | **-77%** |
-| Mixtral of Experts | 16 | 2,417KB | 216KB | 32KB | **-98%** | **-85%** |
-| GPT-4 Technical Report | 100 | 5,122KB | 635KB | 117KB | **-97%** | **-81%** |
-| LoRA | 26 | 1,571KB | 1,024KB | 82KB | **-94%** | **-91%** |
-| **Total** | **169** | **12,140KB** | **2,522KB** | **340KB** | **-97%** | **-86%** |
+| Mixtral of Experts | 16 | 2,417KB | 216KB | 31KB | **-98%** | **-85%** |
+| GPT-4 Technical Report | 100 | 5,122KB | 635KB | 116KB | **-97%** | **-81%** |
+| LoRA | 26 | 1,571KB | 1,024KB | 91KB | **-94%** | **-91%** |
+| **Total** | **169** | **12,140KB** | **2,522KB** | **349KB** | **-97%** | **-86%** |
 
 ## What's compared
 

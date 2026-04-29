@@ -192,7 +192,7 @@ describe("getBenchmarkReport", () => {
       expect(report.total.pages).toBe(169)
       expect(report.total.pdfBytes).toBe(12431634)
       expect(report.total.htmlBytes).toBe(2582565)
-      expect(report.total.paper7Bytes).toBe(348343)
+      expect(report.total.paper7Bytes).toBe(357519)
       expect(report.total.vsPdfPercent).toBe(-97)
       expect(report.total.vsHtmlPercent).toBe(-86)
     }))

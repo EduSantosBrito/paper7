@@ -25,6 +25,7 @@ describe("docs hardening", () => {
   it("does not ship or document unsafe shell installer", () => {
     const markdown = [
       "README.md",
+      "llms.txt",
       "docs/sources.md",
       "skills/paper7/SKILL.md",
       "skills/paper7-research/SKILL.md"
