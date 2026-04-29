@@ -17,8 +17,8 @@ describe("docs hardening", () => {
     const readme = readText("README.md")
     const install = section(readme, "## Install", "## AI Agent Skill")
 
-    expect(install).toContain("npm install -g @guataiba/paper7")
-    expect(install).toContain("npx @guataiba/paper7")
+    expect(install).toContain("npm install -g @p7dotorg/paper7")
+    expect(install).toContain("npx @p7dotorg/paper7")
     expect(install).not.toMatch(/curl|install\.sh|\| bash/)
   })
 

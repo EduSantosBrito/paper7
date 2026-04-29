@@ -9,7 +9,7 @@ Pre-1.0, minor versions may add features; breaking changes (if any) are called o
 
 ### Changed
 
-- Rewrote paper7 as the `@guataiba/paper7` TypeScript npm CLI.
+- Rewrote paper7 as the `@p7dotorg/paper7` TypeScript npm CLI.
 - Switched command parsing and routing to `effect/unstable/cli`.
 - Replaced legacy shell smoke coverage with deterministic `@effect/vitest` suites.
 - Removed the legacy shell implementation and retained shell smoke scripts.
@@ -140,6 +140,7 @@ Initial release.
 - Claude Code slash command + skills.sh package (paper7, paper7-research)
 - Benchmark: 97% smaller than PDF, 86% smaller than raw HTML across 5 landmark papers
 
+[0.6.0-beta.0]: https://github.com/lucianfialho/paper7/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/lucianfialho/paper7/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/lucianfialho/paper7/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/lucianfialho/paper7/compare/v0.2.0...v0.2.1

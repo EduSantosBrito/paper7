@@ -9,10 +9,10 @@
 ## Install
 
 ```bash
-npm install -g @guataiba/paper7
+npm install -g @p7dotorg/paper7
 
 # Or run without installing
-npx @guataiba/paper7 search "attention mechanism"
+npx @p7dotorg/paper7 search "attention mechanism"
 ```
 
 ## AI Agent Skill

@@ -24,7 +24,7 @@ describe("package hardening", () => {
   it("keeps npm package metadata stable", () => {
     const pkg = record(packageJson)
 
-    expect(pkg.name).toBe("@guataiba/paper7")
+    expect(pkg.name).toBe("@p7dotorg/paper7")
     expect(pkg.version).toBe("0.6.0-beta.0")
     expect(pkg.type).toBe("module")
   })

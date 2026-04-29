@@ -6,7 +6,7 @@ Use paper7 as a slash command inside Claude Code.
 
 1. Make sure paper7 CLI is installed:
 ```bash
-npm install -g @guataiba/paper7
+npm install -g @p7dotorg/paper7
 ```
 
 2. Copy the command to your project or global commands:

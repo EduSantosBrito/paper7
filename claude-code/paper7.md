@@ -26,5 +26,5 @@ Instructions:
 
 6. If paper7 is not installed, tell the user to install it:
    ```
-   npm install -g @guataiba/paper7
+   npm install -g @p7dotorg/paper7
    ```
