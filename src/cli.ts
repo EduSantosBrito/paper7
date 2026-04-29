@@ -9,8 +9,10 @@ import { ArxivClient, ArxivLive, type ArxivError } from "./arxiv.js"
 import { CachePaths, CachePathsLive, type CacheError } from "./cache.js"
 import { CliValidationError } from "./cliValidation.js"
 import { CrossrefClient, CrossrefLive, type CrossrefError } from "./crossref.js"
+import type { CitationError } from "./cite.js"
 import type { GetError } from "./get.js"
-import type { CliCommand, PaperIdentifier, RangeSpec } from "./parser.js"
+import type { KbError } from "./kb.js"
+import type { CliCommand, CitationFormat, PaperIdentifier, RangeSpec } from "./parser.js"
 import { parsePaperIdentifier, parseRangeSpec } from "./parser.js"
 import { PubmedClient, PubmedLive, type PubmedError } from "./pubmed.js"
 import { RepositoryDiscoveryClient, RepositoryDiscoveryLive, type RepositoryDiscoveryError } from "./repo.js"
@@ -24,15 +26,18 @@ export const VERSION = "0.6.0-beta.0"
 const DEFAULT_MAX = 10
 const SOURCE_CHOICES: ReadonlyArray<"arxiv" | "pubmed"> = ["arxiv", "pubmed"]
 const SORT_CHOICES: ReadonlyArray<"relevance" | "date"> = ["relevance", "date"]
+const CITATION_FORMAT_CHOICES: ReadonlyArray<CitationFormat> = ["bibtex", "apa", "abnt"]
 
 export type LazyCommandName =
   | "search"
   | "get"
   | "refs"
+  | "cite"
   | "repo"
   | "cache"
   | "vault"
   | "browse"
+  | "kb"
 
 export class CommandLoadError extends Data.TaggedError("CommandLoadError")<{
   readonly command: LazyCommandName
@@ -46,10 +51,12 @@ export type CommandLoaders = {
   readonly search: CommandLoader<Pick<typeof import("./commands/search.js"), "runSearchCommand">>
   readonly get: CommandLoader<Pick<typeof import("./commands/get.js"), "runGetCommand">>
   readonly refs: CommandLoader<Pick<typeof import("./commands/refs.js"), "runRefsCommand">>
+  readonly cite: CommandLoader<Pick<typeof import("./commands/cite.js"), "runCiteCommand">>
   readonly repo: CommandLoader<Pick<typeof import("./commands/repo.js"), "runRepoCommand">>
   readonly cache: CommandLoader<Pick<typeof import("./commands/cache.js"), "runCacheCommand">>
   readonly vault: CommandLoader<Pick<typeof import("./commands/vault.js"), "runVaultCommand">>
   readonly browse: CommandLoader<Pick<typeof import("./commands/browse.js"), "runBrowseCommand">>
+  readonly kb: CommandLoader<Pick<typeof import("./commands/kb.js"), "runKbCommand">>
 }
 
 const defaultSearchLoader: CommandLoaders["search"] = () =>
@@ -68,6 +75,12 @@ const defaultRefsLoader: CommandLoaders["refs"] = () =>
   Effect.tryPromise({
     try: () => import("./commands/refs.js"),
     catch: (cause) => new CommandLoadError({ command: "refs", message: "failed to load refs command implementation", cause }),
+  })
+
+const defaultCiteLoader: CommandLoaders["cite"] = () =>
+  Effect.tryPromise({
+    try: () => import("./commands/cite.js"),
+    catch: (cause) => new CommandLoadError({ command: "cite", message: "failed to load cite command implementation", cause }),
   })
 
 const defaultRepoLoader: CommandLoaders["repo"] = () =>
@@ -94,14 +107,22 @@ const defaultBrowseLoader: CommandLoaders["browse"] = () =>
     catch: (cause) => new CommandLoadError({ command: "browse", message: "failed to load browse command implementation", cause }),
   })
 
+const defaultKbLoader: CommandLoaders["kb"] = () =>
+  Effect.tryPromise({
+    try: () => import("./commands/kb.js"),
+    catch: (cause) => new CommandLoadError({ command: "kb", message: "failed to load kb command implementation", cause }),
+  })
+
 const defaultLoaders: CommandLoaders = {
   search: defaultSearchLoader,
   get: defaultGetLoader,
   refs: defaultRefsLoader,
+  cite: defaultCiteLoader,
   repo: defaultRepoLoader,
   cache: defaultCacheLoader,
   vault: defaultVaultLoader,
   browse: defaultBrowseLoader,
+  kb: defaultKbLoader,
 }
 
 const showCommandHelp = (commandPath: ReadonlyArray<string>): Effect.Effect<void, CliError.ShowHelp> =>
@@ -168,7 +189,8 @@ export const makeRootCommand = (loaders?: Partial<CommandLoaders>) => {
     range: Flag.string("range").pipe(Flag.optional, Flag.withDescription("Detailed-only line slice START:END")),
     noRefs: Flag.boolean("no-refs").pipe(Flag.withDescription("Strip references section")),
     noCache: Flag.boolean("no-cache").pipe(Flag.withDescription("Force re-download")),
-    noTldr: Flag.boolean("no-tldr").pipe(Flag.withDescription("Skip TLDR enrichment"))
+    noTldr: Flag.boolean("no-tldr").pipe(Flag.withDescription("Skip TLDR enrichment")),
+    abstractOnly: Flag.boolean("abstract-only").pipe(Flag.withDescription("Emit title, metadata, and abstract only"))
   }, (config) =>
     Effect.gen(function*() {
       const id = yield* parseIdentifierEffect("get", config.id)
@@ -181,7 +203,8 @@ export const makeRootCommand = (loaders?: Partial<CommandLoaders>) => {
         range,
         refs: !config.noRefs,
         cache: !config.noCache,
-        tldr: !config.noTldr
+        tldr: !config.noTldr,
+        abstractOnly: config.abstractOnly
       })
     })).pipe(Command.withShortDescription("Fetch paper content"))
 
@@ -208,6 +231,17 @@ export const makeRootCommand = (loaders?: Partial<CommandLoaders>) => {
     parseIdentifierEffect("repo", config.id).pipe(
       Effect.flatMap((id) => runCommand({ tag: "repo", id }))
     )).pipe(Command.withShortDescription("Find code repositories"))
+
+  const citeCommand = Command.make("cite", {
+    id: Argument.string("id").pipe(Argument.withDescription("Paper identifier")),
+    format: Flag.choice("format", CITATION_FORMAT_CHOICES).pipe(
+      Flag.withDefault("bibtex"),
+      Flag.withDescription("Citation format")
+    )
+  }, (config) =>
+    parseIdentifierEffect("cite", config.id).pipe(
+      Effect.flatMap((id) => runCommand({ tag: "cite", id, format: config.format }))
+    )).pipe(Command.withShortDescription("Format citation"))
 
   const listCommand = Command.make("list", {}, () => runCommand({ tag: "list" })).pipe(
     Command.withShortDescription("List cached papers")
@@ -253,17 +287,57 @@ export const makeRootCommand = (loaders?: Partial<CommandLoaders>) => {
     Command.withShortDescription("Browse local cache")
   )
 
+  const kbIngestCommand = Command.make("ingest", {
+    id: Argument.string("id").pipe(Argument.withDescription("Paper identifier"))
+  }, (config) =>
+    parseIdentifierEffect("kb ingest", config.id).pipe(
+      Effect.flatMap((id) => runCommand({ tag: "kb-ingest", id }))
+    )).pipe(Command.withShortDescription("Fetch paper into wiki sources"))
+
+  const kbReadCommand = Command.make("read", {
+    slug: Argument.string("slug").pipe(Argument.withDescription("Page slug, index, or log"))
+  }, (config) => runCommand({ tag: "kb-read", slug: config.slug })).pipe(
+    Command.withShortDescription("Read wiki page")
+  )
+
+  const kbWriteCommand = Command.make("write", {
+    slug: Argument.string("slug").pipe(Argument.withDescription("Page slug"))
+  }, (config) => runCommand({ tag: "kb-write", slug: config.slug })).pipe(
+    Command.withShortDescription("Write wiki page from stdin")
+  )
+
+  const kbSearchCommand = Command.make("search", {
+    pattern: Argument.string("pattern").pipe(Argument.withDescription("Search pattern"))
+  }, (config) => runCommand({ tag: "kb-search", pattern: config.pattern })).pipe(
+    Command.withShortDescription("Search wiki pages")
+  )
+
+  const kbListCommand = Command.make("list", {}, () => runCommand({ tag: "kb-list" })).pipe(
+    Command.withShortDescription("List wiki pages and sources")
+  )
+
+  const kbStatusCommand = Command.make("status", {}, () => runCommand({ tag: "kb-status" })).pipe(
+    Command.withShortDescription("Show wiki status")
+  )
+
+  const kbCommand = Command.make("kb", {}, () => showCommandHelp(["paper7", "kb"])).pipe(
+    Command.withShortDescription("Manage local research wiki"),
+    Command.withSubcommands([kbIngestCommand, kbReadCommand, kbWriteCommand, kbSearchCommand, kbListCommand, kbStatusCommand])
+  )
+
   const rootForHelp = Command.make("paper7", {}, () => showCommandHelp(["paper7"])).pipe(
     Command.withDescription("arXiv, PubMed, and DOI papers as clean context for LLMs"),
     Command.withSubcommands([
       searchCommand,
       getCommand,
       refsCommand,
+      citeCommand,
       repoCommand,
       listCommand,
       cacheCommand,
       vaultCommand,
-      browseCommand
+      browseCommand,
+      kbCommand
     ]),
     Command.withGlobalFlags([versionAlias])
   )
@@ -280,11 +354,13 @@ export const makeRootCommand = (loaders?: Partial<CommandLoaders>) => {
       searchCommand,
       getCommand,
       refsCommand,
+      citeCommand,
       repoCommand,
       listCommand,
       cacheCommand,
       vaultCommand,
       browseCommand,
+      kbCommand,
       helpCommand
     ]),
     Command.withGlobalFlags([versionAlias])
@@ -299,10 +375,12 @@ export type CliCommandError =
   | CommandLoadError
   | GetError
   | RefsError
+  | CitationError
   | RepositoryDiscoveryError
   | CacheError
   | VaultError
   | BrowseError
+  | KbError
 
 const reportAndFail =
   <E>(format: (error: E) => string) =>
@@ -334,6 +412,14 @@ function makeRunCommand(loaders: CommandLoaders) {
           Effect.catch((error: CommandLoadError | RefsError): Effect.Effect<never, CommandLoadError | RefsError> => {
             if (error._tag === "CommandLoadError") return reportAndFail(formatCommandLoadError)(error)
             return reportAndFail(formatRefsError)(error)
+          })
+        )
+      case "cite":
+        return loaders.cite().pipe(
+          Effect.flatMap((module) => module.runCiteCommand(command)),
+          Effect.catch((error: CommandLoadError | CitationError): Effect.Effect<never, CommandLoadError | CitationError> => {
+            if (error._tag === "CommandLoadError") return reportAndFail(formatCommandLoadError)(error)
+            return reportAndFail(formatCitationError)(error)
           })
         )
       case "repo":
@@ -371,7 +457,69 @@ function makeRunCommand(loaders: CommandLoaders) {
             return reportAndFail(formatBrowseError)(error)
           })
         )
+      case "kb-ingest":
+      case "kb-read":
+      case "kb-write":
+      case "kb-search":
+      case "kb-list":
+      case "kb-status":
+        return loaders.kb().pipe(
+          Effect.flatMap((module) => module.runKbCommand(command)),
+          Effect.catch((error: CommandLoadError | KbError | GetError): Effect.Effect<never, CommandLoadError | KbError | GetError> => {
+            if (error._tag === "CommandLoadError") return reportAndFail(formatCommandLoadError)(error)
+            if (isGetError(error)) return reportAndFail(formatGetError)(error)
+            return reportAndFail(formatKbError)(error)
+          })
+        )
     }
+  }
+}
+
+const isGetError = (error: KbError | GetError): error is GetError => {
+  switch (error._tag) {
+    case "GetCacheReadError":
+    case "GetCacheWriteError":
+    case "GetRangeError":
+    case "GetArxivError":
+    case "GetAr5ivError":
+    case "GetPubmedError":
+    case "GetCrossrefError":
+      return true
+    case "KbIoError":
+    case "KbInvalidSlug":
+    case "KbGetError":
+      return false
+  }
+}
+
+const formatKbError = (error: KbError): string => {
+  switch (error._tag) {
+    case "KbIoError":
+      return `error: ${error.message}`
+    case "KbInvalidSlug":
+      return `error: invalid wiki slug: ${error.slug}`
+    case "KbGetError":
+      return formatGetError(error.error)
+  }
+}
+
+const formatCitationError = (error: CitationError): string => {
+  switch (error._tag) {
+    case "ArxivHttpError":
+    case "ArxivTransientError":
+    case "ArxivTimeoutError":
+    case "ArxivDecodeError":
+      return formatArxivError(error)
+    case "CrossrefHttpError":
+    case "CrossrefTransientError":
+    case "CrossrefTimeoutError":
+    case "CrossrefDecodeError":
+      return formatCrossrefError(error)
+    case "PubmedHttpError":
+    case "PubmedTransientError":
+    case "PubmedTimeoutError":
+    case "PubmedDecodeError":
+      return formatPubmedError(error)
   }
 }
 

@@ -7,12 +7,19 @@ Pre-1.0, minor versions may add features; breaking changes (if any) are called o
 
 ## [0.6.0-beta.0] - 2026-04-28
 
+### Added
+
+- Ported `paper7 get <id> --abstract-only` to the Effect CLI for arXiv, PubMed, and DOI metadata triage.
+- Ported `paper7 cite <id> --format <bibtex|apa|abnt>` to the Effect CLI.
+- Ported `paper7 kb` local wiki commands to the Effect CLI.
+
 ### Changed
 
 - Rewrote paper7 as the `@p7dotorg/paper7` TypeScript npm CLI.
 - Switched command parsing and routing to `effect/unstable/cli`.
 - Replaced legacy shell smoke coverage with deterministic `@effect/vitest` suites.
 - Removed the legacy shell implementation and retained shell smoke scripts.
+- Preserved prompt-injection boundaries with `<untrusted-content>` wrappers around fetched paper output.
 
 ### Security
 

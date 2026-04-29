@@ -54,6 +54,7 @@ export type GetArxivParams = {
   readonly refs: boolean
   readonly tldr: boolean
   readonly detailed: boolean
+  readonly abstractOnly: boolean
   readonly range?: RangeSpec
 }
 
@@ -66,6 +67,12 @@ export type GetDoiParams = Omit<GetArxivParams, "id"> & {
 }
 
 export const getArxivPaper = (params: GetArxivParams): Effect.Effect<string, GetError, ArxivClient | Ar5ivClient | SemanticScholarClient> => {
+  if (params.abstractOnly) {
+    return fetchArxivAbstract(params.id, params.tldr).pipe(
+      Effect.map((markdown) => wrapUntrusted(markdown, "arxiv", params.id))
+    )
+  }
+
   const dir = cacheDir(params.id)
   const cacheFile = join(dir, "paper.md")
 
@@ -83,6 +90,13 @@ export const getArxivPaper = (params: GetArxivParams): Effect.Effect<string, Get
 }
 
 export const getPubmedPaper = (params: GetPubmedParams): Effect.Effect<string, GetError, PubmedClient | SemanticScholarClient> => {
+  if (params.abstractOnly) {
+    const paperId = `pmid:${params.id}`
+    return fetchPubmedAbstract(params.id, params.tldr).pipe(
+      Effect.map((markdown) => wrapUntrusted(markdown, "pubmed", paperId))
+    )
+  }
+
   const cacheId = `pmid-${params.id}`
   const paperId = `pmid:${params.id}`
   const dir = cacheDir(cacheId)
@@ -100,6 +114,13 @@ export const getPubmedPaper = (params: GetPubmedParams): Effect.Effect<string, G
 export const getDoiPaper = (params: GetDoiParams): Effect.Effect<string, GetError, CrossrefClient | ArxivClient | Ar5ivClient | SemanticScholarClient> => {
   const arxivId = arxivIdFromDoi(params.id)
   if (arxivId !== undefined) return getArxivPaper({ ...params, id: arxivId })
+
+  if (params.abstractOnly) {
+    const paperId = `doi:${params.id}`
+    return fetchDoiAbstract(params.id, params.tldr).pipe(
+      Effect.map((markdown) => wrapUntrusted(markdown, "doi", paperId))
+    )
+  }
 
   const paperId = `doi:${params.id}`
   const dir = cacheDir(`doi-${safeDoiDir(params.id)}`)
@@ -155,6 +176,24 @@ const fetchTldr = (id: PaperIdentifier): Effect.Effect<string | undefined, never
     Effect.catch(() => Effect.succeed(undefined))
   )
 
+const fetchArxivAbstract = (id: string, includeTldr: boolean): Effect.Effect<string, GetError, ArxivClient | SemanticScholarClient> =>
+  ArxivClient.use((arxiv) => arxiv.get(id)).pipe(
+    Effect.mapError((error): GetError => new GetArxivError({ error })),
+    Effect.zipWith(includeTldr ? fetchTldr({ tag: "arxiv", id }) : Effect.succeed(undefined), buildArxivAbstractMarkdown)
+  )
+
+const fetchPubmedAbstract = (id: string, includeTldr: boolean): Effect.Effect<string, GetError, PubmedClient | SemanticScholarClient> =>
+  PubmedClient.use((pubmed) => pubmed.get(id)).pipe(
+    Effect.mapError((error): GetError => new GetPubmedError({ error })),
+    Effect.zipWith(includeTldr ? fetchTldr({ tag: "pubmed", id }) : Effect.succeed(undefined), buildPubmedMarkdown)
+  )
+
+const fetchDoiAbstract = (doi: string, includeTldr: boolean): Effect.Effect<string, GetError, CrossrefClient | SemanticScholarClient> =>
+  CrossrefClient.use((crossref) => crossref.get(doi)).pipe(
+    Effect.mapError((error): GetError => new GetCrossrefError({ error })),
+    Effect.zipWith(includeTldr ? fetchTldr({ tag: "doi", id: doi }) : Effect.succeed(undefined), buildDoiMarkdown)
+  )
+
 const readCachedPaper = (cacheFile: string): Effect.Effect<string, GetError> =>
   Effect.tryPromise({
     try: () => readFile(cacheFile, { encoding: "utf8" }),
@@ -191,6 +230,20 @@ const buildCanonicalMarkdown = (metadata: ArxivPaperMetadata, html: string, tldr
     body,
   ].join("\n") + "\n"
 }
+
+const buildArxivAbstractMarkdown = (metadata: ArxivPaperMetadata, tldr: string | undefined): string => [
+  `# ${metadata.title}`,
+  "",
+  `**Authors:** ${metadata.authors.join(", ")}`,
+  `**arXiv:** https://arxiv.org/abs/${metadata.id}`,
+  ...(tldr === undefined ? [] : [`**TLDR:** ${tldr}`]),
+  "",
+  "---",
+  "",
+  "## Abstract",
+  "",
+  metadata.abstract,
+].join("\n") + "\n"
 
 const fetchAndCachePubmed = (
   id: string,
@@ -492,6 +545,7 @@ export const getPaper = (command: Extract<CliCommand, { readonly tag: "get" }>):
         refs: command.refs,
         tldr: command.tldr,
         detailed: command.detailed,
+        abstractOnly: command.abstractOnly,
         range: command.range,
       })
     case "pubmed":
@@ -501,6 +555,7 @@ export const getPaper = (command: Extract<CliCommand, { readonly tag: "get" }>):
         refs: command.refs,
         tldr: command.tldr,
         detailed: command.detailed,
+        abstractOnly: command.abstractOnly,
         range: command.range,
       })
     case "doi":
@@ -510,6 +565,7 @@ export const getPaper = (command: Extract<CliCommand, { readonly tag: "get" }>):
         refs: command.refs,
         tldr: command.tldr,
         detailed: command.detailed,
+        abstractOnly: command.abstractOnly,
         range: command.range,
       })
   }

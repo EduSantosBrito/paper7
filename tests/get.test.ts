@@ -387,6 +387,27 @@ describe("get command", () => {
       expect(ar5ivResult.exit._tag).toBe("Failure")
       expect(ar5ivResult.stderr).toBe("error: ar5iv decode failure: ar5iv response missing article")
     })))
+
+  it.effect("abstract-only fetches metadata without full-text client", () =>
+    withTempHome(Effect.gen(function*() {
+      const arxivResult = yield* runRootWith(["get", "2401.04088", "--abstract-only", "--no-tldr"], fixtureClients({
+        arxiv: { search: unusedArxiv.search, get: () => Effect.succeed(arxivMetadata) },
+        ar5iv: unusedAr5iv
+      }))
+      const pubmedResult = yield* runRootWith(["get", "pmid:38903003", "--abstract-only", "--no-tldr"], fixtureClients({
+        pubmed: { search: unusedPubmed.search, get: () => Effect.succeed(pubmedMetadata) }
+      }))
+      const doiResult = yield* runRootWith(["get", "doi:10.5555/example.paper", "--abstract-only", "--no-tldr"], fixtureClients({
+        crossref: { get: () => Effect.succeed(doiMetadata) }
+      }))
+
+      expect(arxivResult.exit._tag).toBe("Success")
+      expect(arxivResult.stdout).toContain("## Abstract")
+      expect(arxivResult.stdout).toContain("An abstract from arXiv.")
+      expect(arxivResult.stdout).not.toContain("Introduction")
+      expect(pubmedResult.stdout).toContain("A PubMed abstract.")
+      expect(doiResult.stdout).toContain("**DOI:** 10.5555/example.paper")
+    })))
 })
 
 describe("get yieldable failures", () => {
@@ -404,7 +425,7 @@ describe("get yieldable failures", () => {
         tldr: () => Effect.succeed(undefined),
       }
 
-      const result = yield* getArxivPaper({ id: "2401.04088", cache: false, refs: true, tldr: false, detailed: true }).pipe(
+      const result = yield* getArxivPaper({ id: "2401.04088", cache: false, refs: true, tldr: false, detailed: true, abstractOnly: false }).pipe(
         Effect.provideService(ArxivClient, arxivClient),
         Effect.provideService(Ar5ivClient, ar5ivClient),
         Effect.provideService(SemanticScholarClient, semanticScholar),
@@ -430,7 +451,7 @@ describe("get yieldable failures", () => {
         tldr: () => Effect.succeed(undefined),
       }
 
-      const result = yield* getArxivPaper({ id: "2401.04088", cache: false, refs: true, tldr: false, detailed: true }).pipe(
+      const result = yield* getArxivPaper({ id: "2401.04088", cache: false, refs: true, tldr: false, detailed: true, abstractOnly: false }).pipe(
         Effect.provideService(ArxivClient, arxivClient),
         Effect.provideService(Ar5ivClient, ar5ivClient),
         Effect.provideService(SemanticScholarClient, semanticScholar),
@@ -453,7 +474,7 @@ describe("get yieldable failures", () => {
         tldr: () => Effect.succeed(undefined),
       }
 
-      const result = yield* getPubmedPaper({ id: "38903003", cache: false, refs: true, tldr: false, detailed: true }).pipe(
+      const result = yield* getPubmedPaper({ id: "38903003", cache: false, refs: true, tldr: false, detailed: true, abstractOnly: false }).pipe(
         Effect.provideService(PubmedClient, pubmedClient),
         Effect.provideService(SemanticScholarClient, semanticScholar),
         Effect.catchTag("GetPubmedError", (error) => Effect.succeed(error))
@@ -481,7 +502,7 @@ describe("get yieldable failures", () => {
         tldr: () => Effect.succeed(undefined),
       }
 
-      const result = yield* getDoiPaper({ id: "10.5555/example.paper", cache: false, refs: true, tldr: false, detailed: true }).pipe(
+      const result = yield* getDoiPaper({ id: "10.5555/example.paper", cache: false, refs: true, tldr: false, detailed: true, abstractOnly: false }).pipe(
         Effect.provideService(CrossrefClient, crossrefClient),
         Effect.provideService(ArxivClient, arxivClient),
         Effect.provideService(Ar5ivClient, ar5ivClient),
@@ -504,7 +525,7 @@ describe("get yieldable failures", () => {
         getHtml: () => Effect.succeed(ar5ivHtml),
       }
 
-      const result = yield* getArxivPaper({ id: "2401.04088", cache: false, refs: true, tldr: false, detailed: true, range: { start: 1000, end: 2000 } }).pipe(
+      const result = yield* getArxivPaper({ id: "2401.04088", cache: false, refs: true, tldr: false, detailed: true, abstractOnly: false, range: { start: 1000, end: 2000 } }).pipe(
         Effect.provideService(ArxivClient, arxivClient),
         Effect.provideService(Ar5ivClient, ar5ivClient),
         Effect.catchTag("GetRangeError", (error) => Effect.succeed(error))
@@ -528,7 +549,7 @@ describe("get yieldable failures", () => {
         tldr: () => Effect.fail(new SemanticScholarDecodeError({ message: "TLDR failure" })),
       }
 
-      const result = yield* getArxivPaper({ id: "2401.04088", cache: false, refs: true, tldr: true, detailed: true }).pipe(
+      const result = yield* getArxivPaper({ id: "2401.04088", cache: false, refs: true, tldr: true, detailed: true, abstractOnly: false }).pipe(
         Effect.provideService(ArxivClient, arxivClient),
         Effect.provideService(Ar5ivClient, ar5ivClient),
         Effect.provideService(SemanticScholarClient, semanticScholar)

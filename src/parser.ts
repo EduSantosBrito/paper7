@@ -10,6 +10,7 @@ export type RangeSpec = {
 
 export type Source = "arxiv" | "pubmed"
 export type SearchSort = "relevance" | "date"
+export type CitationFormat = "bibtex" | "apa" | "abnt"
 
 export type CliCommand =
   | {
@@ -28,6 +29,12 @@ export type CliCommand =
       readonly refs: boolean
       readonly cache: boolean
       readonly tldr: boolean
+      readonly abstractOnly: boolean
+    }
+  | {
+      readonly tag: "cite"
+      readonly id: PaperIdentifier
+      readonly format: CitationFormat
     }
   | {
       readonly tag: "refs"
@@ -42,6 +49,12 @@ export type CliCommand =
   | { readonly tag: "vault-export"; readonly id: PaperIdentifier }
   | { readonly tag: "vault-all" }
   | { readonly tag: "browse" }
+  | { readonly tag: "kb-ingest"; readonly id: PaperIdentifier }
+  | { readonly tag: "kb-read"; readonly slug: string }
+  | { readonly tag: "kb-write"; readonly slug: string }
+  | { readonly tag: "kb-search"; readonly pattern: string }
+  | { readonly tag: "kb-list" }
+  | { readonly tag: "kb-status" }
 
 export const parseRangeSpec = (input: string): RangeSpec | undefined => {
   const match = /^(\d+):(\d+)$/.exec(input)

@@ -30,11 +30,14 @@ Live upstream checks are not part of the default suite. Add explicit Vitest suit
 | PubMed get | `tests/get.test.ts` uses fake PubMed, cache, render, and Semantic Scholar services. |
 | DOI get | `tests/get.test.ts` uses fake Crossref and DOI render coverage. |
 | get modes | `tests/get.test.ts` covers compact, detailed, range, no refs, cache, and TLDR modes. |
+| abstract-only | `tests/get.test.ts` covers arXiv, PubMed, and DOI abstract-only output without full-text fetch. |
 | refs | `tests/refs-repo.test.ts` uses fake Semantic Scholar services and JSON output assertions. |
 | repo | `tests/refs-repo.test.ts` uses fake repository discovery services. |
+| cite | `tests/cite.test.ts` uses fake arXiv, PubMed, and Crossref services for citation output. |
 | cache | `tests/cache.test.ts` uses temporary filesystem coverage for list and clear behavior. |
 | vault | `tests/vault.test.ts` uses temporary filesystem coverage for config and export behavior. |
 | browse | `tests/browse.test.ts` uses test stdin/stdout and fake cache entries. |
+| kb | `tests/kb.test.ts` covers local wiki read, list, status, search, and ingest paths. |
 | README docs | `tests/docs-hardening.test.ts` checks npm/npx install docs and unsafe installer removal. |
 | release hardening | `tests/package-hardening.test.ts` checks publish surface, dependency allowlist, install hooks, and default test command. |
 | Semantic Scholar | `tests/refs-repo.test.ts` and `tests/get.test.ts` cover references, TLDR, rate limits, retries, and typed errors with fake clients. |

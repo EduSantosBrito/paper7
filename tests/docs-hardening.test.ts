@@ -25,8 +25,6 @@ describe("docs hardening", () => {
   it("does not ship or document unsafe shell installer", () => {
     const markdown = [
       "README.md",
-      "claude-code/README.md",
-      "claude-code/paper7.md",
       "docs/sources.md",
       "skills/paper7/SKILL.md",
       "skills/paper7-research/SKILL.md"
@@ -56,11 +54,14 @@ describe("docs hardening", () => {
       "PubMed get",
       "DOI get",
       "get modes",
+      "abstract-only",
       "refs",
       "repo",
+      "cite",
       "cache",
       "vault",
       "browse",
+      "kb",
       "README docs",
       "release hardening",
       "Semantic Scholar"
