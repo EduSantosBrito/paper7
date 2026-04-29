@@ -180,7 +180,8 @@ export const makeRootCommand = (loaders?: Partial<CommandLoaders>) => {
     ),
     noCache: Flag.boolean("no-cache").pipe(Flag.withDescription("Force fresh search"))
   }, (config) => runCommand({ tag: "search", query: config.query, source: config.source, max: config.max, sort: config.sort, cache: !config.noCache })).pipe(
-    Command.withShortDescription("Search papers by keyword")
+    Command.withShortDescription("Search papers by keyword"),
+    Command.withDescription("Search for papers across arXiv or PubMed by keyword. Results are cached locally for fast repeat access. Use this when you need to discover papers but don't yet have an identifier.")
   )
 
   const getCommand = Command.make("get", {
@@ -206,7 +207,10 @@ export const makeRootCommand = (loaders?: Partial<CommandLoaders>) => {
         tldr: !config.noTldr,
         abstractOnly: config.abstractOnly
       })
-    })).pipe(Command.withShortDescription("Fetch paper content"))
+    })).pipe(
+      Command.withShortDescription("Fetch paper content"),
+      Command.withDescription("Fetch and display paper content from arXiv, PubMed, or a DOI. Use --detailed for full paper text, --abstract-only for a quick summary, or --range to extract specific sections. Papers are cached locally after first fetch.")
+    )
 
   const refsCommand = Command.make("refs", {
     id: Argument.string("id").pipe(Argument.withDescription("Paper identifier")),
@@ -223,14 +227,20 @@ export const makeRootCommand = (loaders?: Partial<CommandLoaders>) => {
     Effect.gen(function*() {
       const id = yield* parseIdentifierEffect("refs", config.id)
       yield* runCommand({ tag: "refs", id, max: config.max, json: config.json })
-    })).pipe(Command.withShortDescription("List references"))
+    })).pipe(
+      Command.withShortDescription("List references"),
+      Command.withDescription("List bibliographic references for a paper using Semantic Scholar. Use this to discover related work or build a citation graph. Results include titles, authors, and venues where available.")
+    )
 
   const repoCommand = Command.make("repo", {
     id: Argument.string("id").pipe(Argument.withDescription("Paper identifier"))
   }, (config) =>
     parseIdentifierEffect("repo", config.id).pipe(
       Effect.flatMap((id) => runCommand({ tag: "repo", id }))
-    )).pipe(Command.withShortDescription("Find code repositories"))
+    )).pipe(
+      Command.withShortDescription("Find code repositories"),
+      Command.withDescription("Discover code repositories associated with a paper via Papers With Code. Use this when you want to reproduce results or explore the implementation of a paper.")
+    )
 
   const citeCommand = Command.make("cite", {
     id: Argument.string("id").pipe(Argument.withDescription("Paper identifier")),
@@ -241,10 +251,14 @@ export const makeRootCommand = (loaders?: Partial<CommandLoaders>) => {
   }, (config) =>
     parseIdentifierEffect("cite", config.id).pipe(
       Effect.flatMap((id) => runCommand({ tag: "cite", id, format: config.format }))
-    )).pipe(Command.withShortDescription("Format citation"))
+    )).pipe(
+      Command.withShortDescription("Format citation"),
+      Command.withDescription("Generate a citation for a paper in BibTeX, APA, or ABNT format. Use this to quickly grab properly formatted references for your own papers or bibliographies.")
+    )
 
   const listCommand = Command.make("list", {}, () => runCommand({ tag: "list" })).pipe(
-    Command.withShortDescription("List cached papers")
+    Command.withShortDescription("List cached papers"),
+    Command.withDescription("List all papers currently cached locally. Use this to see what you have already fetched and avoid redundant downloads.")
   )
 
   const cacheClearCommand = Command.make("clear", {
@@ -258,6 +272,7 @@ export const makeRootCommand = (loaders?: Partial<CommandLoaders>) => {
 
   const cacheCommand = Command.make("cache", {}, () => showCommandHelp(["paper7", "cache"])).pipe(
     Command.withShortDescription("Manage cache"),
+    Command.withDescription("Manage the local paper cache. Use this to clear cached papers and free disk space, or to remove specific papers when you want to force a fresh download."),
     Command.withSubcommands([cacheClearCommand])
   )
 
@@ -280,11 +295,13 @@ export const makeRootCommand = (loaders?: Partial<CommandLoaders>) => {
       yield* runCommand({ tag: "vault-export", id })
     })).pipe(
       Command.withShortDescription("Export papers to vault"),
+      Command.withDescription("Export cached papers to a vault directory for long-term storage or syncing. First run `vault init` to set the vault path, then export individual papers or all cached papers at once."),
       Command.withSubcommands([vaultInitCommand, vaultAllCommand])
     )
 
   const browseCommand = Command.make("browse", {}, () => runCommand({ tag: "browse" })).pipe(
-    Command.withShortDescription("Browse local cache")
+    Command.withShortDescription("Browse local cache"),
+    Command.withDescription("Interactively browse and select papers from the local cache. Use this to quickly find and open papers you have previously fetched without remembering their identifiers.")
   )
 
   const kbIngestCommand = Command.make("ingest", {
@@ -322,6 +339,7 @@ export const makeRootCommand = (loaders?: Partial<CommandLoaders>) => {
 
   const kbCommand = Command.make("kb", {}, () => showCommandHelp(["paper7", "kb"])).pipe(
     Command.withShortDescription("Manage local research wiki"),
+    Command.withDescription("Manage a local research wiki for reading notes and paper summaries. Use `kb ingest` to pull papers into your wiki sources, `kb read` and `kb write` to maintain pages, and `kb search` to find notes across your knowledge base."),
     Command.withSubcommands([kbIngestCommand, kbReadCommand, kbWriteCommand, kbSearchCommand, kbListCommand, kbStatusCommand])
   )
 

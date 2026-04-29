@@ -14,6 +14,7 @@
     "benchmark": "tsx src/benchmark.ts",
     "benchmark:live": "tsx src/benchmark.ts --live",
     "benchmark:cli": "tsx src/cliPerformanceBenchmark.ts",
+    "benchmark:security": "tsx src/securityBenchmark.ts",
     "build": "tsc",
     "dev": "tsx src/cli.ts",
     "dev:built": "node dist/cli.js",

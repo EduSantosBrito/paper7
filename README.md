@@ -149,6 +149,18 @@ Tested with 5 landmark papers (Attention, RAG, Mixtral, GPT-4, LoRA) — 169 pag
 
 Reproduce with `bun run benchmark`. Refresh upstream-derived artifacts with `bun run benchmark:live`.
 
+### Security benchmark
+
+Every command that emits user-facing output is tested against prompt-injection attacks.
+
+`bun run benchmark:security` runs 17 live probes via the OpenCode framework across all output paths — search results, paper bodies, citations, references, and metadata.
+
+| Scope | Probes | Passed | Failed |
+|-------|-------:|-------:|-------:|
+| All user-facing commands | 17 | 17 | 0 |
+
+Output is wrapped in `<untrusted-content>` tags so agents treat paper text as external data, not instructions.
+
 ## How it works
 
 **arXiv flow** (full-text):
